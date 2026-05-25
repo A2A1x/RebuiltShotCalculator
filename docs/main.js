@@ -44,7 +44,7 @@ function bindSlider(numId, slId) {
   num.addEventListener('input', () => { sl.value = num.value; });
 }
 [
-  ['sim-dist','sim-dist-sl'], ['sim-speed','sim-speed-sl'], ['sim-angle','sim-angle-sl'],
+  ['sim-dist','sim-dist-sl'],
   ['sim-rv','sim-rv-sl'],     ['sim-spin','sim-spin-sl'],
   ['tbl-hood','tbl-hood-sl'], ['tbl-mps','tbl-mps-sl'],   ['tbl-spin','tbl-spin-sl'],
   ['lkp-dist','lkp-dist-sl'], ['lkp-rv','lkp-rv-sl'],
@@ -66,28 +66,52 @@ function switchTableTab(name) {
     c.classList.toggle('active', c.id === 'ttab-' + name));
 }
 
+// Sweep range used by the Simulate tab (Shot Table generation uses its own
+// broader defaults so it can find shots across all distances).
+const SIM_SWEEP = {
+  speedRange: [7.5, 15.0],
+  angleRange: [35.0, 75.0],
+};
+
 // ── Simulate tab ───────────────────────────────────────────────────────────────
+// Sweeps the valid region for the given distance / radial velocity, picks the
+// most error-tolerant shot, and draws its trajectory.
 window.runSimulate = function () {
-  const dist = val('sim-dist');
-  const result = PHYSICS.simulateShot({
+  const dist   = val('sim-dist');
+  const params = {
     distance:       dist,
-    exitSpeed:      val('sim-speed'),
-    launchAngleDeg: val('sim-angle'),
-    spinRps:        val('sim-spin'),
     robotRadialVel: val('sim-rv'),
+    spinRps:        val('sim-spin'),
     drag:           $('sim-drag').checked,
     magnus:         $('sim-magnus').checked,
+  };
+
+  const box = $('sim-result');
+  const valid   = PHYSICS.findValidShots({ ...params, ...SIM_SWEEP });
+  const optimal = PHYSICS.selectOptimalShot(valid);
+
+  if (!optimal) {
+    box.className = 'result-box miss';
+    box.textContent = 'No valid shots found at this distance / radial velocity.';
+    box.classList.remove('hidden');
+    return;
+  }
+
+  const result = PHYSICS.simulateShot({
+    ...params,
+    exitSpeed:       optimal.speed,
+    launchAngleDeg:  optimal.angle,
     storeTrajectory: true,
   });
 
-  const box = $('sim-result');
   const goalR = PHYSICS.GOAL_RADIUS;
   box.className = 'result-box ' + (result.hit ? 'hit' : 'miss');
   box.innerHTML = `
-    <strong>${result.hit ? '✓  HIT' : '✗  MISS'}</strong><br/>
-    Entry x: <strong>${result.xFinal.toFixed(3)} m</strong><br/>
-    Goal opening: ${(dist - goalR).toFixed(2)} – ${(dist + goalR).toFixed(2)} m<br/>
-    Time of flight: ${result.tof.toFixed(3)} s
+    <strong>${result.hit ? '✓  HIT (optimal)' : '✗  MISS'}</strong><br/>
+    Exit speed: <strong>${optimal.speed.toFixed(2)} m/s</strong><br/>
+    Launch angle: <strong>${optimal.angle.toFixed(2)}°</strong><br/>
+    Entry x: ${result.xFinal.toFixed(3)} m (goal ${(dist - goalR).toFixed(2)} – ${(dist + goalR).toFixed(2)} m)<br/>
+    Time of flight: ${result.tof.toFixed(3)} s · valid shots in region: ${valid.length}
   `;
   box.classList.remove('hidden');
 
@@ -146,7 +170,7 @@ window.runValidRegion = function () {
     magnus:         $('sim-magnus').checked,
   };
 
-  const valid   = PHYSICS.findValidShots({ ...params });
+  const valid   = PHYSICS.findValidShots({ ...params, ...SIM_SWEEP });
   const optimal = PHYSICS.selectOptimalShot(valid);
 
   if (!valid.length) {
@@ -372,7 +396,7 @@ function farRimLine(dist, rimH, goalR) {
   };
 }
 
-// 4-inch walls above each rim edge — front (red = miss), back (green = hit)
+// 8-inch walls above each rim edge — both red = miss
 function rimWalls(dist, rimH, wallTop, goalR) {
   return [
     {
@@ -382,9 +406,9 @@ function rimWalls(dist, rimH, wallTop, goalR) {
       showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
     },
     {
-      label: 'Back wall (hit)',
+      label: 'Back wall (miss)',
       data: [{ x: dist + goalR, y: rimH }, { x: dist + goalR, y: wallTop }],
-      borderColor: 'rgba(60,200,80,0.90)',
+      borderColor: 'rgba(220,60,60,0.90)',
       showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
     },
   ];
@@ -460,7 +484,11 @@ function shotTolerance(valid, optimal) {
 
 // ── Table tab ──────────────────────────────────────────────────────────────────
 window.generateTable = function () {
-  if (activeWorker) { activeWorker.terminate(); activeWorker = null; }
+  if (activeWorker) {
+    if (typeof activeWorker.terminate === 'function') activeWorker.terminate();
+    else if (typeof activeWorker.cancel === 'function') activeWorker.cancel();
+    activeWorker = null;
+  }
 
   const cfg = {
     distMin: val('tbl-dmin'),   distMax: val('tbl-dmax'),
@@ -481,41 +509,128 @@ window.generateTable = function () {
   status.classList.add('hidden');
   $('tbl-generate-btn').disabled = true;
 
-  activeWorker = new Worker('worker.js');
-  activeWorker.postMessage({ type: 'generate', config: cfg });
-
-  activeWorker.onmessage = e => {
-    if (e.data.type === 'progress') {
-      bar.style.width = e.data.pct + '%';
-      label.textContent = e.data.pct + '%';
-    } else if (e.data.type === 'done') {
-      bar.style.width = '100%'; label.textContent = '100% — Done';
-      tableEntries = e.data.table;
-
-      solver = new SHOT_TABLE.ShotPolynomialSolver(4);
-      solver.fit(tableEntries);
-      tableGenerated = true;
-      activeWorker = null;
-      $('tbl-generate-btn').disabled = false;
-
-      const validCount = tableEntries.filter(e => e.validCount > 0).length;
-      status.className = 'result-box info';
-      status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · Polynomials fitted (degree 4)`;
-      status.classList.remove('hidden');
-
-      drawTableCharts();
-      drawPolyCurves('polyCurvesChart');
-      drawPolyCurves('lookupPolyChart');
-    }
+  const onProgress = pct => {
+    bar.style.width = pct + '%';
+    label.textContent = pct + '%';
   };
-
-  activeWorker.onerror = err => {
-    status.className = 'result-box miss';
-    status.textContent = 'Worker error: ' + err.message;
+  const onDone = table => {
+    bar.style.width = '100%'; label.textContent = '100% — Done';
+    tableEntries = table;
+    solver = new SHOT_TABLE.ShotPolynomialSolver(4);
+    solver.fit(tableEntries);
+    tableGenerated = true;
+    activeWorker = null;
+    $('tbl-generate-btn').disabled = false;
+    const validCount = tableEntries.filter(e => e.validCount > 0).length;
+    status.className = 'result-box info';
+    status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · Polynomials fitted (degree 4)`;
     status.classList.remove('hidden');
+    drawTableCharts();
+    drawPolyCurves('polyCurvesChart');
+    drawPolyCurves('lookupPolyChart');
+  };
+  const onError = (msg, cellsDone) => {
+    status.className = 'result-box miss';
+    status.textContent = `Generation failed after ${cellsDone ?? 0} cells: ${msg}`;
+    status.classList.remove('hidden');
+    activeWorker = null;
     $('tbl-generate-btn').disabled = false;
   };
+
+  // Try Web Worker; if unavailable (e.g. file:// origin), fall back to inline.
+  let worker = null;
+  try { worker = new Worker('worker.js'); } catch (_) {}
+
+  if (worker) {
+    activeWorker = worker;
+    worker.postMessage({ type: 'generate', config: cfg });
+    worker.onmessage = e => {
+      if (e.data.type === 'progress') onProgress(e.data.pct);
+      else if (e.data.type === 'error') {
+        worker.terminate();
+        onError(e.data.message, e.data.cellsDone);
+        console.error('worker error', e.data);
+      } else if (e.data.type === 'done') onDone(e.data.table);
+    };
+    worker.onerror = err => {
+      const msg = err.message || err.filename || 'unknown (check console)';
+      onError(`${msg} @ ${err.filename || '?'}:${err.lineno || '?'}`);
+      console.error('worker onerror', err);
+    };
+  } else {
+    // Inline fallback: same logic, run on main thread with periodic yields.
+    activeWorker = runTableInline(cfg, onProgress, onDone,
+      (err) => onError((err && err.message) || String(err)));
+  }
 };
+
+// Inline shot-table generator — used when Web Workers are unavailable
+// (notably file:// origin in Chrome). Yields every ~50ms so the UI stays
+// responsive. Returns an object with .cancel() that aborts the run.
+function runTableInline(cfg, onProgress, onDone, onError) {
+  const linspace = (lo, hi, n) =>
+    Array.from({ length: n }, (_, i) => lo + i * (hi - lo) / (n - 1));
+  const distances  = linspace(cfg.distMin, cfg.distMax, cfg.distSteps);
+  const radialVels = linspace(-3.0, 3.0, cfg.rvSteps);
+  const total = distances.length * radialVels.length;
+  const table = [];
+  let i = 0, j = 0, done = 0, cancelled = false;
+
+  onProgress(0);
+
+  function tick() {
+    if (cancelled) return;
+    const t0 = performance.now();
+    try {
+      while (i < distances.length) {
+        while (j < radialVels.length) {
+          const dist = distances[i], rv = radialVels[j];
+          const valid = PHYSICS.findValidShots({
+            distance: dist, robotRadialVel: rv, spinRps: cfg.spinRps,
+            drag: cfg.drag, magnus: cfg.magnus,
+            speedSteps: 45, angleSteps: 45,
+          });
+          const optimal = PHYSICS.selectOptimalShot(valid);
+          let entry;
+          if (optimal) {
+            const speeds = valid.map(s => s.speed);
+            const angles = valid.map(s => s.angle);
+            entry = {
+              distance: dist, radialVelocity: rv,
+              exitSpeed:   optimal.speed * cfg.mpsFactor,
+              launchAngle: optimal.angle + cfg.hoodAngleOffset,
+              toleranceSpeed: PHYSICS.std(speeds),
+              toleranceAngle: PHYSICS.std(angles),
+              validCount: valid.length,
+            };
+          } else {
+            entry = {
+              distance: dist, radialVelocity: rv,
+              exitSpeed: 0, launchAngle: 0,
+              toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
+            };
+          }
+          table.push(entry);
+          done++; j++;
+          if (performance.now() - t0 > 50) {
+            onProgress(Math.round(100 * done / total));
+            setTimeout(tick, 0);
+            return;
+          }
+        }
+        j = 0; i++;
+      }
+      onProgress(100);
+      onDone(table);
+    } catch (err) {
+      console.error('inline generation error', err);
+      onError(err);
+    }
+  }
+
+  setTimeout(tick, 0);
+  return { cancel: () => { cancelled = true; } };
+}
 
 function drawTableCharts() {
   const valid = tableEntries.filter(e => e.validCount > 0);

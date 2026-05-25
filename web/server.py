@@ -15,6 +15,11 @@ from flask import Flask, render_template, request, jsonify, Response, stream_wit
 from physics import simulate_shot, find_valid_shots, select_optimal_shot, GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, WALL_TOP, SHOOTER_HEIGHT
 from shot_table import ShotTableGenerator, ShotPolynomialSolver, TuningParams
 
+# Sweep range used by the Simulate tab. The shot-table generator keeps the
+# broader physics defaults so it can find valid shots at any distance.
+SIM_SPEED_RANGE = (7.5, 15.0)
+SIM_ANGLE_RANGE = (35.0, 75.0)
+
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # Server-side state (one table/solver instance per session is fine for a team tool)
@@ -33,22 +38,54 @@ def index():
 
 @app.route("/api/simulate", methods=["POST"])
 def api_simulate():
+    """Simulate a shot. If speed/angle are omitted, auto-picks the optimal."""
     data = request.json
+    dist   = float(data["distance"])
+    rv     = float(data.get("radial_vel", 0.0))
+    spin   = float(data.get("spin", 50.0))
+    drag   = bool(data.get("drag", True))
+    magnus = bool(data.get("magnus", True))
+
+    speed_in = data.get("speed")
+    angle_in = data.get("angle")
+    auto = speed_in is None or angle_in is None
+    valid_count = None
+
+    if auto:
+        valid = find_valid_shots(
+            distance=dist, robot_radial_vel=rv, spin_rps=spin,
+            speed_range=SIM_SPEED_RANGE, angle_range=SIM_ANGLE_RANGE,
+        )
+        valid_count = len(valid)
+        optimal = select_optimal_shot(valid)
+        if not optimal:
+            return jsonify({
+                "no_valid_shots": True,
+                "rim_height":  round(RIM_HEIGHT, 4),
+                "wall_top":    round(WALL_TOP, 4),
+                "goal_x_near": round(dist - GOAL_RADIUS, 4),
+                "goal_x_far":  round(dist + GOAL_RADIUS, 4),
+            })
+        speed = float(optimal["speed"])
+        angle = float(optimal["angle"])
+    else:
+        speed = float(speed_in)
+        angle = float(angle_in)
+
     result = simulate_shot(
-        distance=float(data["distance"]),
-        exit_speed=float(data["speed"]),
-        launch_angle_deg=float(data["angle"]),
-        spin_rps=float(data.get("spin", 50.0)),
-        robot_radial_vel=float(data.get("radial_vel", 0.0)),
-        include_drag=bool(data.get("drag", True)),
-        include_magnus=bool(data.get("magnus", True)),
+        distance=dist, exit_speed=speed, launch_angle_deg=angle,
+        spin_rps=spin, robot_radial_vel=rv,
+        include_drag=drag, include_magnus=magnus,
     )
-    dist = float(data["distance"])
     return jsonify({
         "hit": bool(result.hit),
         "x_final": round(float(result.x_final), 4),
         "y_final": round(float(result.y_final), 4),
         "tof": round(float(result.time_of_flight), 4),
+        "exit_speed":  round(speed, 3),
+        "launch_angle": round(angle, 2),
+        "auto":        auto,
+        "valid_count": valid_count,
         "rim_height":  round(RIM_HEIGHT, 4),
         "wall_top":    round(WALL_TOP, 4),
         "goal_x_near": round(dist - GOAL_RADIUS, 4),
@@ -65,6 +102,8 @@ def api_valid_region():
         distance=float(data["distance"]),
         robot_radial_vel=float(data.get("radial_vel", 0.0)),
         spin_rps=float(data.get("spin", 50.0)),
+        speed_range=SIM_SPEED_RANGE,
+        angle_range=SIM_ANGLE_RANGE,
     )
     optimal = select_optimal_shot(valid)
     speeds = [s["speed"] for s in valid]
@@ -92,7 +131,10 @@ def api_shot_fan():
     drag   = bool(data.get("drag", True))
     magnus = bool(data.get("magnus", True))
 
-    valid   = find_valid_shots(distance=dist, robot_radial_vel=rv, spin_rps=spin)
+    valid   = find_valid_shots(
+        distance=dist, robot_radial_vel=rv, spin_rps=spin,
+        speed_range=SIM_SPEED_RANGE, angle_range=SIM_ANGLE_RANGE,
+    )
     optimal = select_optimal_shot(valid)
 
     def traj_for(speed, angle):

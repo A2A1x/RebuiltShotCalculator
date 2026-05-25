@@ -17,7 +17,7 @@ function bindSlider(numberId, sliderId) {
   num.addEventListener("input", () => { sl.value = num.value; });
 }
 [
-  ["sim-dist","sim-dist-sl"], ["sim-speed","sim-speed-sl"], ["sim-angle","sim-angle-sl"],
+  ["sim-dist","sim-dist-sl"],
   ["sim-rv","sim-rv-sl"],     ["sim-spin","sim-spin-sl"],
   ["tbl-hood","tbl-hood-sl"], ["tbl-mps","tbl-mps-sl"],   ["tbl-spin","tbl-spin-sl"],
   ["lkp-dist","lkp-dist-sl"], ["lkp-rv","lkp-rv-sl"],
@@ -58,11 +58,13 @@ function switchTableTab(name) {
 }
 
 // ── Simulate tab ───────────────────────────────────────────────────────────────
+// Server picks the optimal (speed, angle) from the valid region; we only
+// supply distance, radial velocity, spin, and physics toggles.
 async function runSimulate() {
   const payload = {
-    distance: val("sim-dist"), speed: val("sim-speed"),
-    angle: val("sim-angle"),   radial_vel: val("sim-rv"),
-    spin: val("sim-spin"),
+    distance:   val("sim-dist"),
+    radial_vel: val("sim-rv"),
+    spin:       val("sim-spin"),
     drag:   document.getElementById("sim-drag").checked,
     magnus: document.getElementById("sim-magnus").checked,
   };
@@ -74,12 +76,20 @@ async function runSimulate() {
   const data = await res.json();
 
   const box = document.getElementById("sim-result");
+  if (data.no_valid_shots) {
+    box.className = "result-box miss";
+    box.textContent = "No valid shots found at this distance / radial velocity.";
+    box.classList.remove("hidden");
+    return;
+  }
+
   box.className = "result-box " + (data.hit ? "hit" : "miss");
   box.innerHTML = `
-    <strong>${data.hit ? "✓ HIT" : "✗ MISS"}</strong><br/>
-    Entry x: <strong>${data.x_final.toFixed(3)} m</strong><br/>
-    Goal opening: ${data.goal_x_near.toFixed(2)} – ${data.goal_x_far.toFixed(2)} m<br/>
-    Time of flight: ${data.tof} s
+    <strong>${data.hit ? "✓ HIT (optimal)" : "✗ MISS"}</strong><br/>
+    Exit speed: <strong>${data.exit_speed.toFixed(2)} m/s</strong><br/>
+    Launch angle: <strong>${data.launch_angle.toFixed(2)}°</strong><br/>
+    Entry x: ${data.x_final.toFixed(3)} m (goal ${data.goal_x_near.toFixed(2)} – ${data.goal_x_far.toFixed(2)} m)<br/>
+    Time of flight: ${data.tof} s · valid shots in region: ${data.valid_count}
   `;
   box.classList.remove("hidden");
 
@@ -307,7 +317,7 @@ function farRimLine(dist, rimH, goalR) {
     showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
 }
-// 4-inch walls above each rim edge — front (red = miss), back (green = hit)
+// 8-inch walls above each rim edge — both red = miss
 function rimWalls(dist, rimH, wallTop, goalR) {
   return [
     {
@@ -319,7 +329,7 @@ function rimWalls(dist, rimH, wallTop, goalR) {
     {
       label: "Back wall (miss)",
       data: [{ x: dist + goalR, y: rimH }, { x: dist + goalR, y: wallTop }],
-      borderColor: "rgba(60,200,80,0.90)",
+      borderColor: "rgba(220,60,60,0.90)",
       showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
     },
   ];

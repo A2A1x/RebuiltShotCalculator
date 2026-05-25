@@ -7,7 +7,7 @@ Physics-based shot planning for FRC 2026 (Reefscape), inspired by frc4414's appr
 Instead of empirically tuning a full distance/speed/angle lookup map, this system:
 
 1. **Simulates the full valid shot region** at each (distance, radial velocity) — not just the center of the goal, but all shots that land between the close and far rim. This gives a measure of shot robustness/tolerance.
-2. **Selects the optimal shot** as the centroid of the valid region, maximizing margin to both rims.
+2. **Selects the optimal shot** as the one that maximizes the std-normalized margin between exit-velocity and launch-angle error, i.e. the shot deepest inside the valid region along its weaker axis.
 3. **Fits polynomials** across distance space for O(1) real-time lookup.
 4. **Reduces tuning to two scalar parameters** that correct the entire shot envelope at once.
 

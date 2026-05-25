@@ -24,46 +24,55 @@ self.onmessage = function (e) {
 
   const table = [];
 
-  for (const dist of distances) {
-    for (const rv of radialVels) {
-      const valid = PHYSICS.findValidShots({
-        distance: dist, robotRadialVel: rv, spinRps,
-        drag, magnus,
-        speedSteps: 45, angleSteps: 45,   // balanced quality vs speed
-      });
-      const optimal = PHYSICS.selectOptimalShot(valid);
+  // Signal we're alive so the user sees the bar move off 0% immediately.
+  self.postMessage({ type: 'progress', pct: 0 });
 
-      let entry;
-      if (optimal) {
-        const speeds = valid.map(s => s.speed);
-        const angles = valid.map(s => s.angle);
-        entry = {
-          distance:       dist,
-          radialVelocity: rv,
-          exitSpeed:      optimal.speed * mpsFactor,
-          launchAngle:    optimal.angle + hoodAngleOffset,
-          toleranceSpeed: PHYSICS.std(speeds),
-          toleranceAngle: PHYSICS.std(angles),
-          validCount:     valid.length,
-        };
-      } else {
-        entry = {
-          distance: dist, radialVelocity: rv,
-          exitSpeed: 0, launchAngle: 0,
-          toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
-        };
-      }
-      table.push(entry);
+  try {
+    for (const dist of distances) {
+      for (const rv of radialVels) {
+        const valid = PHYSICS.findValidShots({
+          distance: dist, robotRadialVel: rv, spinRps,
+          drag, magnus,
+          speedSteps: 45, angleSteps: 45,
+        });
+        const optimal = PHYSICS.selectOptimalShot(valid);
 
-      done++;
-      // Post progress every 5% to avoid flooding the message queue
-      if (done % Math.max(1, Math.floor(total / 20)) === 0 || done === total) {
+        let entry;
+        if (optimal) {
+          const speeds = valid.map(s => s.speed);
+          const angles = valid.map(s => s.angle);
+          entry = {
+            distance:       dist,
+            radialVelocity: rv,
+            exitSpeed:      optimal.speed * mpsFactor,
+            launchAngle:    optimal.angle + hoodAngleOffset,
+            toleranceSpeed: PHYSICS.std(speeds),
+            toleranceAngle: PHYSICS.std(angles),
+            validCount:     valid.length,
+          };
+        } else {
+          entry = {
+            distance: dist, radialVelocity: rv,
+            exitSpeed: 0, launchAngle: 0,
+            toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
+          };
+        }
+        table.push(entry);
+
+        done++;
         self.postMessage({ type: 'progress', pct: Math.round(100 * done / total) });
       }
     }
-  }
 
-  self.postMessage({ type: 'done', table });
+    self.postMessage({ type: 'done', table });
+  } catch (err) {
+    self.postMessage({
+      type: 'error',
+      message: (err && err.message) || String(err),
+      stack:   (err && err.stack)   || '',
+      cellsDone: done,
+    });
+  }
 };
 
 function linspace(lo, hi, n) {
