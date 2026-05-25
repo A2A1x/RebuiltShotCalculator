@@ -10,6 +10,8 @@ const PHYSICS = (() => {
   const GOAL_HEIGHT    = 2.36;
   const GOAL_RADIUS    = 0.530;
   const RIM_HEIGHT     = GOAL_HEIGHT - GOAL_RADIUS;  // = 1.83 m, front lip (72 in)
+  const WALL_HEIGHT    = 8 * 0.0254;                 // 8 in rim walls above each rim edge = 0.2032 m
+  const WALL_TOP       = RIM_HEIGHT + WALL_HEIGHT;   // top of rim walls = 2.0332 m
   const BALL_RADIUS    = 0.120;
   const BALL_MASS      = 0.235;
   const SHOOTER_HEIGHT = 0.546;
@@ -59,11 +61,14 @@ const PHYSICS = (() => {
     let wasAbove = y >= RIM_HEIGHT;
     let prevX = x, prevY = y;
 
+    const frontWallX = distance - GOAL_RADIUS;
+    const backWallX  = distance + GOAL_RADIUS;
+
     while (t < MAX_SIM_TIME) {
       const v2 = vx * vx + vy * vy;
       const v  = Math.sqrt(v2);
 
-      let axDrag = 0, ayDrag = 0, ayMagnus = 0;
+      let axDrag = 0, ayDrag = 0, axMagnus = 0, ayMagnus = 0;
 
       if (drag && v > 0) {
         const f = (0.5 * AIR_DENSITY * DRAG_COEFF * BALL_XSECTION * v2) / BALL_MASS;
@@ -72,11 +77,14 @@ const PHYSICS = (() => {
       }
 
       if (magnus && v > 0) {
+        // |F_m|/m = ½ ρ C_m A v ω R / m, direction perpendicular to v in the
+        // lift sense for backspin: ax = -(|F|/m)·(vy/v), ay = +(|F|/m)·(vx/v).
         const fM = (0.5 * AIR_DENSITY * MAGNUS_COEFF * BALL_XSECTION * omega * BALL_RADIUS * v) / BALL_MASS;
-        ayMagnus = fM;
+        axMagnus = -fM * (vy / v);
+        ayMagnus = +fM * (vx / v);
       }
 
-      vx += axDrag * DT;
+      vx += (axDrag + axMagnus) * DT;
       vy += (-GRAVITY + ayDrag + ayMagnus) * DT;
       prevX = x;  prevY = y;
       x  += vx * DT;
@@ -84,6 +92,24 @@ const PHYSICS = (() => {
       t  += DT;
 
       if (storeTrajectory) { trajX.push(x); trajY.push(y); }
+
+      // Front wall: x-crossing at near rim while y in wall range → miss
+      if (prevX < frontWallX && x >= frontWallX) {
+        const frac = (frontWallX - prevX) / (x - prevX + 1e-12);
+        const yAtWall = prevY + frac * (y - prevY);
+        if (yAtWall >= RIM_HEIGHT && yAtWall <= WALL_TOP) {
+          return { hit: false, xFinal: frontWallX, yFinal: yAtWall, tof: t, trajX, trajY };
+        }
+      }
+
+      // Back wall: x-crossing at far rim while y in wall range → miss
+      if (prevX < backWallX && x >= backWallX) {
+        const frac = (backWallX - prevX) / (x - prevX + 1e-12);
+        const yAtWall = prevY + frac * (y - prevY);
+        if (yAtWall >= RIM_HEIGHT && yAtWall <= WALL_TOP) {
+          return { hit: false, xFinal: backWallX, yFinal: yAtWall, tof: t, trajX, trajY };
+        }
+      }
 
       // Detect downward crossing of rim height — ball entering top-loading opening
       const nowAbove = y >= RIM_HEIGHT;
@@ -132,26 +158,74 @@ const PHYSICS = (() => {
   }
 
   /**
-   * Select the shot closest to the centroid of the valid region (maximum margin).
+   * Select the most error-tolerant shot from the valid region.
+   * For each candidate, measure the margin (m/s and deg) to the nearest
+   * invalid neighbour along the speed and angle axes; normalize each by
+   * the std of the valid region in that axis; maximize min(normalized).
    */
   function selectOptimalShot(validShots) {
     if (!validShots.length) return null;
-    let sumSpeed = 0, sumAngle = 0;
-    for (const s of validShots) { sumSpeed += s.speed; sumAngle += s.angle; }
-    const cSpeed = sumSpeed / validShots.length;
-    const cAngle = sumAngle / validShots.length;
 
-    let speeds = validShots.map(s => s.speed);
-    let angles = validShots.map(s => s.angle);
-    const stdSpeed = std(speeds) + 1e-9;
-    const stdAngle = std(angles) + 1e-9;
+    const allSpeeds = validShots.map(s => s.speed);
+    const allAngles = validShots.map(s => s.angle);
+    const meanSpeed = allSpeeds.reduce((a, b) => a + b, 0) / allSpeeds.length;
+    const meanAngle = allAngles.reduce((a, b) => a + b, 0) / allAngles.length;
+    const stdSpeed = std(allSpeeds) + 1e-9;
+    const stdAngle = std(allAngles) + 1e-9;
 
-    let best = null, bestScore = Infinity;
+    const speedsAtAngle = new Map();
+    const anglesAtSpeed = new Map();
     for (const s of validShots) {
-      const ds = (s.speed - cSpeed) / stdSpeed;
-      const da = (s.angle - cAngle) / stdAngle;
-      const score = ds * ds + da * da;
-      if (score < bestScore) { bestScore = score; best = s; }
+      if (!speedsAtAngle.has(s.angle)) speedsAtAngle.set(s.angle, []);
+      if (!anglesAtSpeed.has(s.speed)) anglesAtSpeed.set(s.speed, []);
+      speedsAtAngle.get(s.angle).push(s.speed);
+      anglesAtSpeed.get(s.speed).push(s.angle);
+    }
+    for (const arr of speedsAtAngle.values()) arr.sort((a, b) => a - b);
+    for (const arr of anglesAtSpeed.values()) arr.sort((a, b) => a - b);
+
+    // Smallest gap between consecutive valid values ≈ grid step.
+    // Allow 1.5× that as the contiguity threshold.
+    const minGap = (groups) => {
+      let m = Infinity;
+      for (const arr of groups.values()) {
+        for (let i = 1; i < arr.length; i++) {
+          const g = arr[i] - arr[i - 1];
+          if (g < m) m = g;
+        }
+      }
+      return m;
+    };
+    const speedThresh = minGap(speedsAtAngle) * 1.5;
+    const angleThresh = minGap(anglesAtSpeed) * 1.5;
+
+    const margin = (sortedVals, v, thresh) => {
+      let idx = 0, bestDiff = Infinity;
+      for (let i = 0; i < sortedVals.length; i++) {
+        const d = Math.abs(sortedVals[i] - v);
+        if (d < bestDiff) { bestDiff = d; idx = i; }
+      }
+      let lo = idx;
+      while (lo > 0 && sortedVals[lo] - sortedVals[lo - 1] < thresh) lo--;
+      let hi = idx;
+      while (hi < sortedVals.length - 1 && sortedVals[hi + 1] - sortedVals[hi] < thresh) hi++;
+      return Math.min(v - sortedVals[lo], sortedVals[hi] - v);
+    };
+
+    // Primary: max std-normalized boundary margin (discrete on the grid).
+    // Tiebreak by proximity to centroid so the shot table stays smooth
+    // across adjacent (distance, radial_vel) cells.
+    let best = null, bestScore = -Infinity, bestTie = -Infinity;
+    for (const s of validShots) {
+      const sMargin = margin(speedsAtAngle.get(s.angle), s.speed, speedThresh);
+      const aMargin = margin(anglesAtSpeed.get(s.speed), s.angle, angleThresh);
+      const score = Math.min(sMargin / stdSpeed, aMargin / stdAngle);
+      const ds = (s.speed - meanSpeed) / stdSpeed;
+      const da = (s.angle - meanAngle) / stdAngle;
+      const tie = -(ds * ds + da * da);
+      if (score > bestScore || (score === bestScore && tie > bestTie)) {
+        bestScore = score; bestTie = tie; best = s;
+      }
     }
     return best;
   }
@@ -163,7 +237,7 @@ const PHYSICS = (() => {
   }
 
   return {
-    GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, SHOOTER_HEIGHT,
+    GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, WALL_HEIGHT, WALL_TOP, SHOOTER_HEIGHT,
     simulateShot, findValidShots, selectOptimalShot, std,
   };
 })();

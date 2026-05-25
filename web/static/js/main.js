@@ -17,7 +17,7 @@ function bindSlider(numberId, sliderId) {
   num.addEventListener("input", () => { sl.value = num.value; });
 }
 [
-  ["sim-dist","sim-dist-sl"], ["sim-speed","sim-speed-sl"], ["sim-angle","sim-angle-sl"],
+  ["sim-dist","sim-dist-sl"],
   ["sim-rv","sim-rv-sl"],     ["sim-spin","sim-spin-sl"],
   ["tbl-hood","tbl-hood-sl"], ["tbl-mps","tbl-mps-sl"],   ["tbl-spin","tbl-spin-sl"],
   ["lkp-dist","lkp-dist-sl"], ["lkp-rv","lkp-rv-sl"],
@@ -58,11 +58,13 @@ function switchTableTab(name) {
 }
 
 // ── Simulate tab ───────────────────────────────────────────────────────────────
+// Server picks the optimal (speed, angle) from the valid region; we only
+// supply distance, radial velocity, spin, and physics toggles.
 async function runSimulate() {
   const payload = {
-    distance: val("sim-dist"), speed: val("sim-speed"),
-    angle: val("sim-angle"),   radial_vel: val("sim-rv"),
-    spin: val("sim-spin"),
+    distance:   val("sim-dist"),
+    radial_vel: val("sim-rv"),
+    spin:       val("sim-spin"),
     drag:   document.getElementById("sim-drag").checked,
     magnus: document.getElementById("sim-magnus").checked,
   };
@@ -74,12 +76,20 @@ async function runSimulate() {
   const data = await res.json();
 
   const box = document.getElementById("sim-result");
+  if (data.no_valid_shots) {
+    box.className = "result-box miss";
+    box.textContent = "No valid shots found at this distance / radial velocity.";
+    box.classList.remove("hidden");
+    return;
+  }
+
   box.className = "result-box " + (data.hit ? "hit" : "miss");
   box.innerHTML = `
-    <strong>${data.hit ? "✓ HIT" : "✗ MISS"}</strong><br/>
-    Entry x: <strong>${data.x_final.toFixed(3)} m</strong><br/>
-    Goal opening: ${data.goal_x_near.toFixed(2)} – ${data.goal_x_far.toFixed(2)} m<br/>
-    Time of flight: ${data.tof} s
+    <strong>${data.hit ? "✓ HIT (optimal)" : "✗ MISS"}</strong><br/>
+    Exit speed: <strong>${data.exit_speed.toFixed(2)} m/s</strong><br/>
+    Launch angle: <strong>${data.launch_angle.toFixed(2)}°</strong><br/>
+    Entry x: ${data.x_final.toFixed(3)} m (goal ${data.goal_x_near.toFixed(2)} – ${data.goal_x_far.toFixed(2)} m)<br/>
+    Time of flight: ${data.tof} s · valid shots in region: ${data.valid_count}
   `;
   box.classList.remove("hidden");
 
@@ -92,9 +102,10 @@ function drawSingleTrajectory(data, dist) {
   const ctx = document.getElementById("trajectoryChart").getContext("2d");
 
   const pts  = data.trajectory_x.map((x, i) => ({ x, y: data.trajectory_y[i] }));
-  const rimH = data.rim_height;
-  const goalR = GOAL_RADIUS_M;
-  const xMax  = dist + goalR + 0.6;
+  const rimH    = data.rim_height;
+  const wallTop = data.wall_top;
+  const goalR   = GOAL_RADIUS_M;
+  const xMax    = dist + goalR + 0.6;
 
   new Chart(ctx, {
     type: "scatter",
@@ -104,8 +115,9 @@ function drawSingleTrajectory(data, dist) {
         goalRimBar(dist, rimH, goalR),
         nearRimLine(dist, rimH, goalR),
         farRimLine(dist, rimH, goalR),
-        verticalDrop(data.x_final, rimH),
-        impactCircle(data.x_final, rimH),
+        ...rimWalls(dist, rimH, wallTop, goalR),
+        verticalDrop(data.x_final, data.y_final),
+        impactCircle(data.x_final, data.y_final),
         {
           label: data.hit ? "Ball path (HIT ✓)" : "Ball path (MISS ✗)",
           data: pts,
@@ -162,13 +174,13 @@ function drawShotFan(fan) {
 
   const dist     = fan.distance;
   const rimH     = fan.rim_height;
+  const wallTop  = fan.wall_top;
   const goalNear = fan.goal_x_near;
   const goalFar  = fan.goal_x_far;
   const goalR    = (goalFar - goalNear) / 2;
   const xMax     = dist + goalR + 0.6;
 
   const datasets = fan.trajectories.map(s => {
-    // Color by where in the opening the ball entered (near rim = red, far rim = green)
     const t   = Math.max(0, Math.min(1, (s.x_final - goalNear) / (goalFar - goalNear)));
     const hue = Math.round(t * 120);
     return {
@@ -182,6 +194,7 @@ function drawShotFan(fan) {
   datasets.push(goalRimBar(dist, rimH, goalR));
   datasets.push(nearRimLine(dist, rimH, goalR));
   datasets.push(farRimLine(dist, rimH, goalR));
+  datasets.push(...rimWalls(dist, rimH, wallTop, goalR));
 
   if (fan.optimal) {
     const o = fan.optimal;
@@ -190,8 +203,8 @@ function drawShotFan(fan) {
       data: o.tx.map((x, i) => ({ x, y: o.ty[i] })),
       borderColor: "#4488ee", showLine: true, pointRadius: 0, borderWidth: 3, order: 1,
     });
-    datasets.push(verticalDrop(o.x_final, rimH));
-    datasets.push(impactCircle(o.x_final, rimH));
+    datasets.push(verticalDrop(o.x_final, o.y_final));
+    datasets.push(impactCircle(o.x_final, o.y_final));
   }
 
   new Chart(ctx, {
@@ -303,6 +316,23 @@ function farRimLine(dist, rimH, goalR) {
     borderColor: "rgba(60,200,80,0.40)",
     showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
+}
+// 8-inch walls above each rim edge — both red = miss
+function rimWalls(dist, rimH, wallTop, goalR) {
+  return [
+    {
+      label: "Front wall (miss)",
+      data: [{ x: dist - goalR, y: rimH }, { x: dist - goalR, y: wallTop }],
+      borderColor: "rgba(220,60,60,0.90)",
+      showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
+    },
+    {
+      label: "Back wall (miss)",
+      data: [{ x: dist + goalR, y: rimH }, { x: dist + goalR, y: wallTop }],
+      borderColor: "rgba(220,60,60,0.90)",
+      showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
+    },
+  ];
 }
 function verticalDrop(xFinal, rimH) {
   return {

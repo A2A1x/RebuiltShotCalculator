@@ -16,7 +16,9 @@ GOAL_HEIGHT = 2.36          # Height of goal opening center above floor (m)
                             # = front lip (1.83 m) + half opening diameter (0.530 m)
 GOAL_DEPTH = 1.059          # Front-to-back depth of hexagonal opening (m) = 41.7 in
 GOAL_RADIUS = 0.530         # Radius of hexagonal opening (m) = 41.7 in / 2
-RIM_HEIGHT = GOAL_HEIGHT - GOAL_RADIUS  # Front lip height = 1.83 m (72 in); ball must descend through this
+RIM_HEIGHT  = GOAL_HEIGHT - GOAL_RADIUS  # Front lip height = 1.83 m (72 in); ball must descend through this
+WALL_HEIGHT = 8 * 0.0254                # 8 in rim walls above each rim edge = 0.2032 m
+WALL_TOP    = RIM_HEIGHT + WALL_HEIGHT  # Top of rim walls = 2.0332 m
 BALL_RADIUS = 0.120         # Ball radius (m) - adjust for 2026 game piece
 BALL_MASS = 0.235           # Ball mass (kg)
 BALL_MOMENT_INERTIA = 0.4 * BALL_MASS * BALL_RADIUS**2  # Solid sphere approx
@@ -96,6 +98,9 @@ def simulate_shot(
     was_above_rim = y >= RIM_HEIGHT
     prev_x, prev_y = x, y
 
+    front_wall_x = distance - GOAL_RADIUS
+    back_wall_x  = distance + GOAL_RADIUS
+
     while t < MAX_SIM_TIME:
         v = np.sqrt(vx**2 + vy**2)
 
@@ -107,12 +112,18 @@ def simulate_shot(
             ax_drag = ay_drag = 0.0
 
         if include_magnus and v > 0:
-            magnus_force = 0.5 * AIR_DENSITY * MAGNUS_COEFF * BALL_CROSS_SECTION * omega * BALL_RADIUS * v
-            ay_magnus = magnus_force / BALL_MASS
+            # |F_m| = ½ ρ C_m A v ω R (linear in v, equivalent to C_L = (ωR/v)·C_m
+            # against the standard ½ρv²A·C_L form).
+            # Direction: perpendicular to v in the lift sense for backspin
+            #   ax = -(|F|/m)·(vy/v),  ay = +(|F|/m)·(vx/v)
+            magnus_acc = (0.5 * AIR_DENSITY * MAGNUS_COEFF
+                          * BALL_CROSS_SECTION * omega * BALL_RADIUS * v) / BALL_MASS
+            ax_magnus = -magnus_acc * (vy / v)
+            ay_magnus = +magnus_acc * (vx / v)
         else:
-            ay_magnus = 0.0
+            ax_magnus = ay_magnus = 0.0
 
-        vx += (ax_drag) * DT
+        vx += (ax_drag + ax_magnus) * DT
         vy += (-GRAVITY + ay_drag + ay_magnus) * DT
         prev_x, prev_y = x, y
         x += vx * DT
@@ -121,6 +132,30 @@ def simulate_shot(
 
         traj_x.append(x)
         traj_y.append(y)
+
+        # Front wall: x-crossing at near rim while y in wall range → miss
+        if prev_x < front_wall_x <= x:
+            frac = (front_wall_x - prev_x) / (x - prev_x + 1e-12)
+            y_at_wall = prev_y + frac * (y - prev_y)
+            if RIM_HEIGHT <= y_at_wall <= WALL_TOP:
+                return ShotResult(
+                    hit=False, x_final=front_wall_x, y_final=y_at_wall,
+                    time_of_flight=t,
+                    trajectory_x=np.array(traj_x),
+                    trajectory_y=np.array(traj_y),
+                )
+
+        # Back wall: x-crossing at far rim while y in wall range → miss
+        if prev_x < back_wall_x <= x:
+            frac = (back_wall_x - prev_x) / (x - prev_x + 1e-12)
+            y_at_wall = prev_y + frac * (y - prev_y)
+            if RIM_HEIGHT <= y_at_wall <= WALL_TOP:
+                return ShotResult(
+                    hit=False, x_final=back_wall_x, y_final=y_at_wall,
+                    time_of_flight=t,
+                    trajectory_x=np.array(traj_x),
+                    trajectory_y=np.array(traj_y),
+                )
 
         # Detect downward crossing of rim height — ball entering the top-loading opening
         now_above_rim = y >= RIM_HEIGHT
@@ -200,32 +235,71 @@ def find_valid_shots(
 
 def select_optimal_shot(valid_shots: list[dict]) -> Optional[dict]:
     """
-    From the valid shot region, select the most robust shot.
-    Strategy: find the shot closest to the centroid of the valid region
-    (maximizes tolerance margin), weighted by minimizing sensitivity to
-    speed/angle error (std of neighbors).
+    From the valid shot region, select the most error-tolerant shot.
+
+    For each candidate, measure the margin to the nearest invalid shot along
+    the speed axis (at fixed angle) and along the angle axis (at fixed speed).
+    Normalize each margin by the std of valid speeds / angles, then pick the
+    shot whose minimum normalized margin is largest — i.e. the shot most
+    robust to whichever of exit-velocity or launch-angle error is the
+    weaker direction.
     """
     if not valid_shots:
         return None
 
     speeds = np.array([s["speed"] for s in valid_shots])
     angles = np.array([s["angle"] for s in valid_shots])
+    center_speed = float(np.mean(speeds))
+    center_angle = float(np.mean(angles))
+    speed_std = float(np.std(speeds)) + 1e-9
+    angle_std = float(np.std(angles)) + 1e-9
 
-    center_speed = np.mean(speeds)
-    center_angle = np.mean(angles)
-    speed_std = np.std(speeds) + 1e-9
-    angle_std = np.std(angles) + 1e-9
+    speeds_at_angle: dict[float, list[float]] = {}
+    angles_at_speed: dict[float, list[float]] = {}
+    for s in valid_shots:
+        speeds_at_angle.setdefault(s["angle"], []).append(s["speed"])
+        angles_at_speed.setdefault(s["speed"], []).append(s["angle"])
+    for k in speeds_at_angle:
+        speeds_at_angle[k].sort()
+    for k in angles_at_speed:
+        angles_at_speed[k].sort()
 
+    # Infer grid step from the smallest consecutive gap between valid values.
+    # Treat anything up to 1.5× that gap as "contiguous" so a single missed
+    # grid cell counts as the boundary.
+    def _min_gap(groups: dict[float, list[float]]) -> float:
+        gaps = [b - a for vals in groups.values()
+                for a, b in zip(vals, vals[1:])]
+        return min(gaps) if gaps else 0.0
+
+    speed_thresh = _min_gap(speeds_at_angle) * 1.5 or float("inf")
+    angle_thresh = _min_gap(angles_at_speed) * 1.5 or float("inf")
+
+    def _margin(sorted_vals: list[float], v: float, thresh: float) -> float:
+        idx = min(range(len(sorted_vals)), key=lambda i: abs(sorted_vals[i] - v))
+        lo = idx
+        while lo > 0 and sorted_vals[lo] - sorted_vals[lo - 1] < thresh:
+            lo -= 1
+        hi = idx
+        while hi < len(sorted_vals) - 1 and sorted_vals[hi + 1] - sorted_vals[hi] < thresh:
+            hi += 1
+        return min(v - sorted_vals[lo], sorted_vals[hi] - v)
+
+    # Primary score: max std-normalized margin to boundary.
+    # Margins are discrete (grid-step multiples) so many shots tie at the max.
+    # Tie-break by proximity to the centroid — keeps results smooth across
+    # adjacent (distance, radial_vel) cells when generating the shot table.
     best = None
-    best_score = float("inf")
-
+    best_key = (-float("inf"), -float("inf"))
     for shot in valid_shots:
-        # Normalized distance from centroid - prefer center of valid region
+        s_margin = _margin(speeds_at_angle[shot["angle"]], shot["speed"], speed_thresh)
+        a_margin = _margin(angles_at_speed[shot["speed"]], shot["angle"], angle_thresh)
+        score = min(s_margin / speed_std, a_margin / angle_std)
         ds = (shot["speed"] - center_speed) / speed_std
         da = (shot["angle"] - center_angle) / angle_std
-        score = ds**2 + da**2
-        if score < best_score:
-            best_score = score
+        key = (score, -(ds * ds + da * da))
+        if key > best_key:
+            best_key = key
             best = shot
 
     return best
