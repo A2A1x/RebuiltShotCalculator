@@ -78,6 +78,60 @@ def api_valid_region():
     })
 
 
+@app.route("/api/shot_fan", methods=["POST"])
+def api_shot_fan():
+    """Return full trajectory for every valid shot (downsampled) + optimal trajectory."""
+    data = request.json
+    dist = float(data["distance"])
+    rv   = float(data.get("radial_vel", 0.0))
+    spin = float(data.get("spin", 50.0))
+    drag   = bool(data.get("drag", True))
+    magnus = bool(data.get("magnus", True))
+
+    valid   = find_valid_shots(distance=dist, robot_radial_vel=rv, spin_rps=spin)
+    optimal = select_optimal_shot(valid)
+
+    def traj_for(speed, angle):
+        r = simulate_shot(
+            distance=dist, exit_speed=speed, launch_angle_deg=angle,
+            spin_rps=spin, robot_radial_vel=rv,
+            include_drag=drag, include_magnus=magnus,
+        )
+        step = max(1, len(r.trajectory_x) // 60)
+        return {
+            "tx": r.trajectory_x[::step].tolist(),
+            "ty": r.trajectory_y[::step].tolist(),
+            "y_final": round(float(r.y_final), 4),
+        }
+
+    trajectories = []
+    for s in valid:
+        t = traj_for(s["speed"], s["angle"])
+        trajectories.append({
+            "speed": round(s["speed"], 3),
+            "angle": round(s["angle"], 2),
+            **t,
+        })
+
+    opt_traj = None
+    if optimal:
+        t = traj_for(optimal["speed"], optimal["angle"])
+        opt_traj = {
+            "speed": round(optimal["speed"], 3),
+            "angle": round(optimal["angle"], 2),
+            **t,
+        }
+
+    return jsonify({
+        "trajectories": trajectories,
+        "optimal": opt_traj,
+        "goal_height": round(GOAL_HEIGHT, 4),
+        "goal_low":    round(GOAL_HEIGHT - GOAL_RADIUS, 4),
+        "goal_high":   round(GOAL_HEIGHT + GOAL_RADIUS, 4),
+        "distance": dist,
+    })
+
+
 @app.route("/api/generate_table", methods=["POST"])
 def api_generate_table():
     data = request.json
