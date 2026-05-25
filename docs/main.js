@@ -11,18 +11,9 @@ const $ = id => document.getElementById(id);
 const val = id => parseFloat($(id).value);
 const intVal = id => parseInt($(id).value, 10);
 
-const DARK_BG   = '#181826';
-const GRID_CLR  = 'rgba(100,100,160,0.15)';
-const TEXT_CLR  = '#8888bb';
-
-const chartBase = {
-  responsive: true, maintainAspectRatio: true,
-  plugins: { legend: { labels: { color: TEXT_CLR, font: { size: 11 } } } },
-  scales: {
-    x: { grid: { color: GRID_CLR }, ticks: { color: TEXT_CLR } },
-    y: { grid: { color: GRID_CLR }, ticks: { color: TEXT_CLR } },
-  },
-};
+const GRID_CLR = 'rgba(100,100,160,0.15)';
+const TEXT_CLR = '#8888bb';
+const GOAL_DEPTH = 0.61;   // meters, goal front-to-back depth
 
 function destroyChart(id) {
   const c = Chart.getChart(id); if (c) c.destroy();
@@ -31,6 +22,10 @@ function destroyChart(id) {
 function axisTitle(label) {
   return { display: true, text: label, color: TEXT_CLR, font: { size: 11 } };
 }
+
+const scaleBase = () => ({
+  grid: { color: GRID_CLR }, ticks: { color: TEXT_CLR },
+});
 
 // ── Tab navigation ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -74,8 +69,9 @@ function switchTableTab(name) {
 
 // ── Simulate tab ───────────────────────────────────────────────────────────────
 window.runSimulate = function () {
+  const dist = val('sim-dist');
   const result = PHYSICS.simulateShot({
-    distance:       val('sim-dist'),
+    distance:       dist,
     exitSpeed:      val('sim-speed'),
     launchAngleDeg: val('sim-angle'),
     spinRps:        val('sim-spin'),
@@ -96,113 +92,333 @@ window.runSimulate = function () {
   box.classList.remove('hidden');
 
   switchChartTab('trajectory');
-  drawTrajectory(result);
+  drawSingleTrajectory(result, dist);
 };
 
-function drawTrajectory(result) {
+/**
+ * Draw a single ball trajectory (called by Simulate Shot).
+ * Shows goal indicator: dashed height line, vertical drop, circle, goal bar.
+ */
+function drawSingleTrajectory(result, dist) {
   destroyChart('trajectoryChart');
   const ctx = $('trajectoryChart').getContext('2d');
-  const path = result.trajX.map((x, i) => ({ x, y: result.trajY[i] }));
 
-  // Downsample to ≤400 points for rendering
-  const step = Math.max(1, Math.floor(path.length / 400));
-  const sampled = path.filter((_, i) => i % step === 0);
+  const step = Math.max(1, Math.floor(result.trajX.length / 300));
+  const pts = [];
+  for (let i = 0; i < result.trajX.length; i += step) {
+    pts.push({ x: result.trajX[i], y: result.trajY[i] });
+  }
 
-  const xMax = Math.max(...result.trajX);
-  const gh   = PHYSICS.GOAL_HEIGHT;
-  const gr   = PHYSICS.GOAL_RADIUS;
+  const goalH = PHYSICS.GOAL_HEIGHT;
+  const xMax  = dist + 0.8;
 
   new Chart(ctx, {
     type: 'scatter',
     data: {
       datasets: [
-        { label: 'Ball path', data: sampled,
-          borderColor: '#7b8cde', showLine: true, pointRadius: 0, borderWidth: 2 },
-        { label: result.hit ? 'Hit ✓' : 'Miss ✗',
-          data: [{ x: sampled[sampled.length - 1].x, y: result.yFinal }],
-          backgroundColor: result.hit ? '#56e09e' : '#e05667', pointRadius: 8 },
-        { label: 'Goal centre', data: [{x:0,y:gh},{x:xMax,y:gh}],
-          borderColor:'#f2d96a', borderDash:[6,3], showLine:true, pointRadius:0, borderWidth:1 },
-        { label: 'Upper rim',   data: [{x:0,y:gh+gr},{x:xMax,y:gh+gr}],
-          borderColor:'rgba(86,224,158,0.35)', borderDash:[4,4], showLine:true, pointRadius:0, borderWidth:1 },
-        { label: 'Lower rim',   data: [{x:0,y:gh-gr},{x:xMax,y:gh-gr}],
-          borderColor:'rgba(86,224,158,0.35)', borderDash:[4,4], showLine:true, pointRadius:0, borderWidth:1 },
+        goalHeightLine(goalH, xMax),
+        goalBar(dist, goalH),
+        verticalDrop(dist, result.yFinal),
+        impactCircle(dist, result.yFinal),
+        {
+          label: result.hit ? 'Ball path (HIT ✓)' : 'Ball path (MISS ✗)',
+          data: pts,
+          borderColor: result.hit ? '#4488ee' : '#ee6644',
+          showLine: true, pointRadius: 0, borderWidth: 2.5, order: 1,
+        },
       ],
     },
-    options: {
-      ...chartBase,
-      scales: {
-        x: { ...chartBase.scales.x, title: axisTitle('Distance (m)') },
-        y: { ...chartBase.scales.y, title: axisTitle('Height (m)') },
-      },
-    },
+    options: trajectoryChartOptions(),
   });
 }
 
 window.runValidRegion = function () {
-  const valid = PHYSICS.findValidShots({
+  const params = {
     distance:       val('sim-dist'),
     robotRadialVel: val('sim-rv'),
     spinRps:        val('sim-spin'),
-    drag:   $('sim-drag').checked,
-    magnus: $('sim-magnus').checked,
-  });
+    drag:           $('sim-drag').checked,
+    magnus:         $('sim-magnus').checked,
+  };
+
+  const valid   = PHYSICS.findValidShots({ ...params });
   const optimal = PHYSICS.selectOptimalShot(valid);
 
-  switchChartTab('region');
-  drawRegion(valid, optimal);
+  if (!valid.length) {
+    const box = $('sim-result');
+    box.className = 'result-box miss';
+    box.textContent = 'No valid shots found at this distance / velocity.';
+    box.classList.remove('hidden');
+    return;
+  }
 
-  const speeds = valid.map(s => s.speed);
-  const angles = valid.map(s => s.angle);
-  const box = $('sim-result');
-  box.className = 'result-box info';
-  box.innerHTML = `
-    Valid shots: <strong>${valid.length}</strong><br/>
-    Optimal speed: <strong>${optimal ? optimal.speed.toFixed(2) + ' m/s' : '—'}</strong><br/>
-    Optimal angle: <strong>${optimal ? optimal.angle.toFixed(1) + '°' : '—'}</strong><br/>
-    Speed tolerance (σ): ${PHYSICS.std(speeds).toFixed(2)} m/s
-    &nbsp;·&nbsp;
-    Angle tolerance (σ): ${PHYSICS.std(angles).toFixed(1)}°
-  `;
-  box.classList.remove('hidden');
+  // Shot fan goes in the Trajectory tab; filled region in Valid Region tab
+  switchChartTab('trajectory');
+  drawShotFan(valid, optimal, params);
+  drawValidRegionFilled(valid, optimal);
 };
 
-function drawRegion(valid, optimal) {
+// ── Shot fan (Image 1) ─────────────────────────────────────────────────────────
+/**
+ * Draw ALL valid trajectories colored by landing position in goal window.
+ * Red = close rim, green = far rim. Optimal highlighted in blue.
+ */
+function drawShotFan(valid, optimal, params) {
+  destroyChart('trajectoryChart');
+  const ctx = $('trajectoryChart').getContext('2d');
+
+  const dist   = params.distance;
+  const goalH  = PHYSICS.GOAL_HEIGHT;
+  const goalLo = PHYSICS.GOAL_LOW;
+  const goalHi = PHYSICS.GOAL_HIGH;
+
+  // Simulate every valid shot trajectory
+  const simulated = valid.map(s => {
+    const r = PHYSICS.simulateShot({
+      distance: dist, exitSpeed: s.speed, launchAngleDeg: s.angle,
+      spinRps: params.spinRps, robotRadialVel: params.robotRadialVel,
+      drag: params.drag, magnus: params.magnus, storeTrajectory: true,
+    });
+    return { ...s, traj: r };
+  });
+
+  // Optimal trajectory
+  const optSim = optimal ? PHYSICS.simulateShot({
+    distance: dist, exitSpeed: optimal.speed, launchAngleDeg: optimal.angle,
+    spinRps: params.spinRps, robotRadialVel: params.robotRadialVel,
+    drag: params.drag, magnus: params.magnus, storeTrajectory: true,
+  }) : null;
+
+  const xMax = dist + 0.8;
+
+  // Build one scatter dataset per valid shot (colored by landing position)
+  const datasets = simulated.map(s => {
+    const t = Math.max(0, Math.min(1, (s.traj.yFinal - goalLo) / (goalHi - goalLo)));
+    const hue = Math.round(t * 120); // 0° = red, 120° = green
+    const color = `hsla(${hue}, 80%, 50%, 0.32)`;
+
+    const step = Math.max(1, Math.floor(s.traj.trajX.length / 55));
+    const pts = [];
+    for (let i = 0; i < s.traj.trajX.length; i += step) {
+      pts.push({ x: s.traj.trajX[i], y: s.traj.trajY[i] });
+    }
+    return { data: pts, borderColor: color, showLine: true, pointRadius: 0, borderWidth: 1, order: 4 };
+  });
+
+  // Optimal (blue, thick, on top)
+  if (optSim) {
+    const step = Math.max(1, Math.floor(optSim.trajX.length / 120));
+    const pts = [];
+    for (let i = 0; i < optSim.trajX.length; i += step) {
+      pts.push({ x: optSim.trajX[i], y: optSim.trajY[i] });
+    }
+    datasets.push({
+      label: `Optimal  ${optimal.angle.toFixed(1)}° @ ${optimal.speed.toFixed(2)} m/s`,
+      data: pts,
+      borderColor: '#4488ee', showLine: true, pointRadius: 0, borderWidth: 3, order: 1,
+    });
+  }
+
+  // Goal indicators
+  datasets.push(goalHeightLine(goalH, xMax));
+  if (optSim) {
+    datasets.push(goalBar(dist, goalH));
+    datasets.push(verticalDrop(dist, optSim.yFinal));
+    datasets.push(impactCircle(dist, optSim.yFinal));
+  }
+
+  new Chart(ctx, {
+    type: 'scatter',
+    data: { datasets },
+    options: trajectoryChartOptions(true),
+  });
+}
+
+// ── Valid region filled (Image 2) ──────────────────────────────────────────────
+/**
+ * Show the valid shot region as a filled band bounded by close-rim (red)
+ * and far-rim (green) curves, with tolerance crosshairs at the optimal shot.
+ */
+function drawValidRegionFilled(valid, optimal) {
+  if (!valid.length || !optimal) return;
+
   destroyChart('regionChart');
   const ctx = $('regionChart').getContext('2d');
 
-  const ys  = valid.map(s => s.yFinal);
-  const min = Math.min(...ys), range = Math.max(...ys) - min + 1e-9;
-  const colors = valid.map(s => {
-    const t = (s.yFinal - min) / range;
-    return `rgba(${Math.round(86 + t*138)},${Math.round(60 + t*98)},${Math.round(224 - t*138)},0.75)`;
-  });
+  const { lower, upper } = rimBoundaries(valid);
+  const tol = shotTolerance(valid, optimal);
 
   new Chart(ctx, {
-    type: 'bubble',
+    type: 'scatter',
     data: {
       datasets: [
-        { label: 'Valid shots',
-          data: valid.map(s => ({ x: s.speed, y: s.angle, r: 4 })),
-          backgroundColor: colors, borderWidth: 0 },
-        { label: 'Optimal ★',
-          data: optimal ? [{ x: optimal.speed, y: optimal.angle, r: 9 }] : [],
-          backgroundColor: '#f2d96a', borderColor: '#fff', borderWidth: 1.5 },
+        // Lower boundary fills toward upper
+        {
+          type: 'line',
+          label: 'Close rim',
+          data: lower,
+          borderColor: '#e05667',
+          backgroundColor: 'rgba(50,170,80,0.18)',
+          pointBackgroundColor: '#e05667',
+          pointRadius: 4, pointHoverRadius: 6,
+          fill: '+1', tension: 0.25, order: 4,
+        },
+        // Upper boundary
+        {
+          type: 'line',
+          label: 'Far rim',
+          data: upper,
+          borderColor: '#56e09e',
+          backgroundColor: 'transparent',
+          pointBackgroundColor: '#56e09e',
+          pointRadius: 4, pointHoverRadius: 6,
+          fill: false, tension: 0.25, order: 4,
+        },
+        // Speed tolerance — vertical orange segment at optimal angle
+        {
+          type: 'line',
+          label: `Speed  ${(tol.speedMin - optimal.speed).toFixed(2)} / +${(tol.speedMax - optimal.speed).toFixed(2)} m/s`,
+          data: [{ x: optimal.angle, y: tol.speedMin }, { x: optimal.angle, y: tol.speedMax }],
+          borderColor: '#f5a623',
+          pointBackgroundColor: '#f5a623',
+          pointRadius: 5, borderWidth: 2.5,
+          fill: false, order: 2,
+        },
+        // Angle tolerance — horizontal purple segment at optimal speed
+        {
+          type: 'line',
+          label: `Angle  ${(tol.angleMin - optimal.angle).toFixed(1)}° / +${(tol.angleMax - optimal.angle).toFixed(1)}°`,
+          data: [{ x: tol.angleMin, y: optimal.speed }, { x: tol.angleMax, y: optimal.speed }],
+          borderColor: '#9b59b6',
+          pointBackgroundColor: '#9b59b6',
+          pointRadius: 5, borderWidth: 2.5,
+          fill: false, order: 2,
+        },
+        // Optimal star
+        {
+          type: 'scatter',
+          label: `Optimal  ${optimal.angle.toFixed(1)}° @ ${optimal.speed.toFixed(2)} m/s`,
+          data: [{ x: optimal.angle, y: optimal.speed }],
+          backgroundColor: 'white',
+          borderColor: '#4488ee',
+          pointRadius: 10, pointStyle: 'star', borderWidth: 2, order: 0,
+        },
       ],
     },
     options: {
-      ...chartBase,
+      responsive: true, maintainAspectRatio: true, animation: false,
+      plugins: {
+        legend: {
+          labels: { color: TEXT_CLR, font: { size: 10 }, boxWidth: 14, padding: 10 },
+        },
+      },
       scales: {
-        x: { ...chartBase.scales.x, title: axisTitle('Exit Speed (m/s)') },
-        y: { ...chartBase.scales.y, title: axisTitle('Launch Angle (°)') },
+        x: { ...scaleBase(), title: axisTitle('Launch Angle (°)') },
+        y: { ...scaleBase(), title: axisTitle('Launch Speed (m/s)') },
       },
     },
   });
+
+  // Stats in result box (matches reference image layout)
+  $('sim-result').className = 'result-box info';
+  $('sim-result').innerHTML = `
+    <span style="color:#7b8cde;font-weight:700">Optimal: ${optimal.angle.toFixed(1)}° @ ${optimal.speed.toFixed(2)} m/s</span><br/>
+    <span style="color:#f5a623">Speed: ${(tol.speedMin-optimal.speed).toFixed(2)}/+${(tol.speedMax-optimal.speed).toFixed(2)} m/s</span><br/>
+    <span style="color:#9b59b6">Angle: ${(tol.angleMin-optimal.angle).toFixed(1)}°/+${(tol.angleMax-optimal.angle).toFixed(1)}°</span>
+  `;
+  $('sim-result').classList.remove('hidden');
+}
+
+// ── Shared goal indicator datasets ────────────────────────────────────────────
+
+function goalHeightLine(goalH, xMax) {
+  return {
+    label: 'Goal height',
+    data: [{ x: 0, y: goalH }, { x: xMax, y: goalH }],
+    borderColor: 'rgba(220,60,60,0.55)', borderDash: [9, 5],
+    showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
+  };
+}
+
+function goalBar(dist, goalH) {
+  return {
+    label: 'Goal opening',
+    data: [{ x: dist, y: goalH }, { x: dist + GOAL_DEPTH, y: goalH }],
+    borderColor: 'rgba(60,200,80,0.95)',
+    showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
+  };
+}
+
+function verticalDrop(dist, yFinal) {
+  return {
+    data: [{ x: dist, y: 0 }, { x: dist, y: yFinal }],
+    borderColor: 'rgba(220,60,60,0.75)',
+    showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
+  };
+}
+
+function impactCircle(dist, yFinal) {
+  return {
+    label: 'Impact',
+    data: [{ x: dist, y: yFinal }],
+    backgroundColor: 'rgba(0,0,0,0)', borderColor: 'white',
+    pointRadius: 7, pointStyle: 'circle', borderWidth: 2, showLine: false, order: 1,
+  };
+}
+
+function trajectoryChartOptions(hideLegend = false) {
+  return {
+    responsive: true, maintainAspectRatio: true, animation: false,
+    plugins: {
+      legend: hideLegend
+        ? { labels: { color: TEXT_CLR, font: { size: 10 },
+            filter: item => !!item.text } }
+        : { labels: { color: TEXT_CLR, font: { size: 10 } } },
+    },
+    scales: {
+      x: { ...scaleBase(), title: axisTitle('Distance (m)') },
+      y: { ...scaleBase(), title: axisTitle('Height (m)'), min: 0 },
+    },
+  };
+}
+
+// ── Boundary / tolerance helpers ───────────────────────────────────────────────
+
+/** For each unique angle in valid shots, find min and max speed (close/far rim). */
+function rimBoundaries(valid) {
+  const map = new Map();
+  for (const s of valid) {
+    const k = s.angle.toFixed(2);
+    if (!map.has(k)) map.set(k, { angle: s.angle, speeds: [] });
+    map.get(k).speeds.push(s.speed);
+  }
+  const sorted = [...map.values()].sort((a, b) => a.angle - b.angle);
+  return {
+    lower: sorted.map(b => ({ x: b.angle, y: Math.min(...b.speeds) })),
+    upper: sorted.map(b => ({ x: b.angle, y: Math.max(...b.speeds) })),
+  };
+}
+
+/** Speed range at optimal angle, angle range at optimal speed. */
+function shotTolerance(valid, optimal) {
+  const angles = [...new Set(valid.map(s => s.angle))].sort((a, b) => a - b);
+  const speeds = [...new Set(valid.map(s => s.speed))].sort((a, b) => a - b);
+  const aStep = angles.length > 1 ? (angles[angles.length-1] - angles[0]) / (angles.length-1) : 1;
+  const sStep = speeds.length > 1 ? (speeds[speeds.length-1] - speeds[0]) / (speeds.length-1) : 0.5;
+
+  const atAngle = valid.filter(s => Math.abs(s.angle - optimal.angle) <= aStep * 1.5);
+  const atSpeed = valid.filter(s => Math.abs(s.speed - optimal.speed) <= sStep * 1.5);
+
+  return {
+    speedMin: atAngle.length ? Math.min(...atAngle.map(s => s.speed)) : optimal.speed,
+    speedMax: atAngle.length ? Math.max(...atAngle.map(s => s.speed)) : optimal.speed,
+    angleMin: atSpeed.length ? Math.min(...atSpeed.map(s => s.angle)) : optimal.angle,
+    angleMax: atSpeed.length ? Math.max(...atSpeed.map(s => s.angle)) : optimal.angle,
+  };
 }
 
 // ── Table tab ──────────────────────────────────────────────────────────────────
 window.generateTable = function () {
-  // Cancel any running worker
   if (activeWorker) { activeWorker.terminate(); activeWorker = null; }
 
   const cfg = {
@@ -215,8 +431,8 @@ window.generateTable = function () {
     magnus: $('tbl-magnus').checked,
   };
 
-  const bar   = $('tbl-progress-bar');
-  const label = $('tbl-progress-label');
+  const bar    = $('tbl-progress-bar');
+  const label  = $('tbl-progress-label');
   const status = $('tbl-status');
 
   $('tbl-progress-wrap').classList.remove('hidden');
@@ -268,8 +484,8 @@ function drawTableCharts() {
   const rvs   = [...new Set(valid.map(e => +e.radialVelocity.toFixed(4)))].sort((a,b)=>a-b);
 
   const palette = makeColorRamp(rvs.length, 'rgba(123,140,222,');
-  drawLineMap('heatSpeedChart', dists, rvs, valid, 'exitSpeed',    'Exit Speed (m/s)',  palette);
-  drawLineMap('heatAngleChart', dists, rvs, valid, 'launchAngle',  'Launch Angle (°)',  palette);
+  drawLineMap('heatSpeedChart', dists, rvs, valid, 'exitSpeed',   'Exit Speed (m/s)', palette);
+  drawLineMap('heatAngleChart', dists, rvs, valid, 'launchAngle', 'Launch Angle (°)', palette);
   drawTolMap ('heatTolChart',   dists, rvs, valid);
 
   ['heatspeed-empty','heatangle-empty','heattol-empty','polycurves-empty'].forEach(id =>
@@ -296,17 +512,17 @@ function drawLineMap(canvasId, dists, rvs, entries, field, yLabel, palette) {
 
   new Chart($(canvasId).getContext('2d'), {
     type: 'scatter', data: { datasets },
-    options: { ...chartBase,
+    options: { responsive: true, maintainAspectRatio: true, animation: false,
+      plugins: { legend: { labels: { color: TEXT_CLR, font: { size: 10 } } } },
       scales: {
-        x: { ...chartBase.scales.x, title: axisTitle('Distance (m)') },
-        y: { ...chartBase.scales.y, title: axisTitle(yLabel) },
+        x: { ...scaleBase(), title: axisTitle('Distance (m)') },
+        y: { ...scaleBase(), title: axisTitle(yLabel) },
       },
     },
   });
 }
 
 function drawTolMap(canvasId, dists, rvs, entries) {
-  // Show speed tolerance (σ) as size, one dataset per rv
   destroyChart(canvasId);
   const palette = makeColorRamp(rvs.length, 'rgba(86,204,242,');
   const datasets = rvs.map((rv, i) => ({
@@ -322,10 +538,11 @@ function drawTolMap(canvasId, dists, rvs, entries) {
 
   new Chart($(canvasId).getContext('2d'), {
     type: 'scatter', data: { datasets },
-    options: { ...chartBase,
+    options: { responsive: true, maintainAspectRatio: true, animation: false,
+      plugins: { legend: { labels: { color: TEXT_CLR, font: { size: 10 } } } },
       scales: {
-        x: { ...chartBase.scales.x, title: axisTitle('Distance (m)') },
-        y: { ...chartBase.scales.y, title: axisTitle('Speed Tolerance σ (m/s)') },
+        x: { ...scaleBase(), title: axisTitle('Distance (m)') },
+        y: { ...scaleBase(), title: axisTitle('Speed Tolerance σ (m/s)') },
       },
     },
   });
@@ -347,8 +564,7 @@ function drawPolyCurves(canvasId) {
   const datasets = Object.entries(curves).flatMap(([rv, { speeds, angles }]) => [
     { label: lbl[rv] + ' speed',
       data: distances.map((d, i) => ({ x: +d.toFixed(3), y: speeds[i] })),
-      borderColor: pal[rv], showLine: true, pointRadius: 0, borderWidth: 2,
-      yAxisID: 'ySpeed' },
+      borderColor: pal[rv], showLine: true, pointRadius: 0, borderWidth: 2, yAxisID: 'ySpeed' },
     { label: lbl[rv] + ' angle',
       data: distances.map((d, i) => ({ x: +d.toFixed(3), y: angles[i] })),
       borderColor: pal[rv], borderDash: [5, 3], showLine: true, pointRadius: 0,
@@ -358,11 +574,11 @@ function drawPolyCurves(canvasId) {
   new Chart($(canvasId).getContext('2d'), {
     type: 'scatter', data: { datasets },
     options: {
-      responsive: true, maintainAspectRatio: true,
+      responsive: true, maintainAspectRatio: true, animation: false,
       plugins: { legend: { labels: { color: TEXT_CLR, font: { size: 10 }, boxWidth: 14 } } },
       scales: {
-        x:      { grid:{color:GRID_CLR}, ticks:{color:TEXT_CLR}, title: axisTitle('Distance (m)') },
-        ySpeed: { position:'left',  grid:{color:GRID_CLR}, ticks:{color:TEXT_CLR}, title: axisTitle('Speed (m/s)') },
+        x:      { ...scaleBase(), title: axisTitle('Distance (m)') },
+        ySpeed: { position:'left',  ...scaleBase(), title: axisTitle('Speed (m/s)') },
         yAngle: { position:'right', grid:{drawOnChartArea:false}, ticks:{color:TEXT_CLR}, title: axisTitle('Angle (°)') },
       },
     },
