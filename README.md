@@ -1,6 +1,6 @@
 # FRC 2026 Rebuilt Shot Calculator
 
-Physics-based shot planning for FRC 2026 (Reefscape), inspired by frc4414's approach and the [1690 2022 shot solver presentation](https://www.youtube.com/watch?v=...).
+Physics-based shot planning for FRC 2026 (Reefscape), inspired by frc4414's approach and the [1690 2022 shot solver presentation](https://www.youtube.com/watch?v=N6ogT5DjGOk).
 
 ## Key Design Principles
 
