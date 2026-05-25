@@ -13,7 +13,6 @@ const intVal = id => parseInt($(id).value, 10);
 
 const GRID_CLR = 'rgba(100,100,160,0.15)';
 const TEXT_CLR = '#8888bb';
-const GOAL_DEPTH = 1.059;  // meters, hexagonal opening diameter = 41.7 in
 
 function destroyChart(id) {
   const c = Chart.getChart(id); if (c) c.destroy();
@@ -82,11 +81,12 @@ window.runSimulate = function () {
   });
 
   const box = $('sim-result');
+  const goalR = PHYSICS.GOAL_RADIUS;
   box.className = 'result-box ' + (result.hit ? 'hit' : 'miss');
   box.innerHTML = `
     <strong>${result.hit ? '✓  HIT' : '✗  MISS'}</strong><br/>
-    Y at goal: <strong>${result.yFinal.toFixed(3)} m</strong><br/>
-    Goal window: ${PHYSICS.GOAL_LOW.toFixed(3)} – ${PHYSICS.GOAL_HIGH.toFixed(3)} m<br/>
+    Entry x: <strong>${result.xFinal.toFixed(3)} m</strong><br/>
+    Goal opening: ${(dist - goalR).toFixed(2)} – ${(dist + goalR).toFixed(2)} m<br/>
     Time of flight: ${result.tof.toFixed(3)} s
   `;
   box.classList.remove('hidden');
@@ -109,17 +109,20 @@ function drawSingleTrajectory(result, dist) {
     pts.push({ x: result.trajX[i], y: result.trajY[i] });
   }
 
-  const goalH = PHYSICS.GOAL_HEIGHT;
-  const xMax  = dist + 0.8;
+  const rimH  = PHYSICS.RIM_HEIGHT;
+  const goalR = PHYSICS.GOAL_RADIUS;
+  const xMax  = dist + goalR + 0.6;
 
   new Chart(ctx, {
     type: 'scatter',
     data: {
       datasets: [
-        goalHeightLine(goalH, xMax),
-        goalBar(dist, goalH),
-        verticalDrop(dist, result.yFinal),
-        impactCircle(dist, result.yFinal),
+        rimHeightLine(rimH, xMax),
+        goalRimBar(dist, rimH, goalR),
+        nearRimLine(dist, rimH, goalR),
+        farRimLine(dist, rimH, goalR),
+        verticalDrop(result.xFinal, rimH),
+        impactCircle(result.xFinal, rimH),
         {
           label: result.hit ? 'Ball path (HIT ✓)' : 'Ball path (MISS ✗)',
           data: pts,
@@ -167,10 +170,10 @@ function drawShotFan(valid, optimal, params) {
   destroyChart('trajectoryChart');
   const ctx = $('trajectoryChart').getContext('2d');
 
-  const dist   = params.distance;
-  const goalH  = PHYSICS.GOAL_HEIGHT;
-  const goalLo = PHYSICS.GOAL_LOW;
-  const goalHi = PHYSICS.GOAL_HIGH;
+  const dist  = params.distance;
+  const rimH  = PHYSICS.RIM_HEIGHT;
+  const goalR = PHYSICS.GOAL_RADIUS;
+  const xMax  = dist + goalR + 0.6;
 
   // Simulate every valid shot trajectory
   const simulated = valid.map(s => {
@@ -189,12 +192,10 @@ function drawShotFan(valid, optimal, params) {
     drag: params.drag, magnus: params.magnus, storeTrajectory: true,
   }) : null;
 
-  const xMax = dist + 0.8;
-
-  // Build one scatter dataset per valid shot (colored by landing position)
+  // Color by x position within opening: near rim = red (0°), far rim = green (120°)
   const datasets = simulated.map(s => {
-    const t = Math.max(0, Math.min(1, (s.traj.yFinal - goalLo) / (goalHi - goalLo)));
-    const hue = Math.round(t * 120); // 0° = red, 120° = green
+    const t = Math.max(0, Math.min(1, (s.traj.xFinal - (dist - goalR)) / (2 * goalR)));
+    const hue = Math.round(t * 120);
     const color = `hsla(${hue}, 80%, 50%, 0.32)`;
 
     const step = Math.max(1, Math.floor(s.traj.trajX.length / 55));
@@ -219,12 +220,14 @@ function drawShotFan(valid, optimal, params) {
     });
   }
 
-  // Goal indicators
-  datasets.push(goalHeightLine(goalH, xMax));
+  // Goal indicators: horizontal rim bar + walls + impact marker
+  datasets.push(rimHeightLine(rimH, xMax));
+  datasets.push(goalRimBar(dist, rimH, goalR));
+  datasets.push(nearRimLine(dist, rimH, goalR));
+  datasets.push(farRimLine(dist, rimH, goalR));
   if (optSim) {
-    datasets.push(goalBar(dist, goalH));
-    datasets.push(verticalDrop(dist, optSim.yFinal));
-    datasets.push(impactCircle(dist, optSim.yFinal));
+    datasets.push(verticalDrop(optSim.xFinal, rimH));
+    datasets.push(impactCircle(optSim.xFinal, rimH));
   }
 
   new Chart(ctx, {
@@ -329,38 +332,54 @@ function drawValidRegionFilled(valid, optimal) {
   $('sim-result').classList.remove('hidden');
 }
 
-// ── Shared goal indicator datasets ────────────────────────────────────────────
+// ── Goal indicator dataset factories (top-loading opening) ────────────────────
 
-function goalHeightLine(goalH, xMax) {
+function rimHeightLine(rimH, xMax) {
   return {
-    label: 'Goal height',
-    data: [{ x: 0, y: goalH }, { x: xMax, y: goalH }],
-    borderColor: 'rgba(220,60,60,0.55)', borderDash: [9, 5],
+    label: 'Rim height',
+    data: [{ x: 0, y: rimH }, { x: xMax, y: rimH }],
+    borderColor: 'rgba(220,60,60,0.30)', borderDash: [9, 5],
+    showLine: true, pointRadius: 0, borderWidth: 1, order: 5,
+  };
+}
+
+function goalRimBar(dist, rimH, goalR) {
+  return {
+    label: 'Goal opening',
+    data: [{ x: dist - goalR, y: rimH }, { x: dist + goalR, y: rimH }],
+    borderColor: 'rgba(60,200,80,0.95)',
+    showLine: true, pointRadius: 0, borderWidth: 6, order: 2,
+  };
+}
+
+function nearRimLine(dist, rimH, goalR) {
+  return {
+    data: [{ x: dist - goalR, y: 0 }, { x: dist - goalR, y: rimH }],
+    borderColor: 'rgba(60,200,80,0.40)',
     showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
 }
 
-function goalBar(dist, goalH) {
+function farRimLine(dist, rimH, goalR) {
   return {
-    label: 'Goal opening',
-    data: [{ x: dist, y: goalH }, { x: dist + GOAL_DEPTH, y: goalH }],
-    borderColor: 'rgba(60,200,80,0.95)',
-    showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
+    data: [{ x: dist + goalR, y: 0 }, { x: dist + goalR, y: rimH }],
+    borderColor: 'rgba(60,200,80,0.40)',
+    showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
 }
 
-function verticalDrop(dist, yFinal) {
+function verticalDrop(xFinal, rimH) {
   return {
-    data: [{ x: dist, y: 0 }, { x: dist, y: yFinal }],
+    data: [{ x: xFinal, y: 0 }, { x: xFinal, y: rimH }],
     borderColor: 'rgba(220,60,60,0.75)',
     showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
 }
 
-function impactCircle(dist, yFinal) {
+function impactCircle(xFinal, rimH) {
   return {
     label: 'Impact',
-    data: [{ x: dist, y: yFinal }],
+    data: [{ x: xFinal, y: rimH }],
     backgroundColor: 'rgba(0,0,0,0)', borderColor: 'white',
     pointRadius: 7, pointStyle: 'circle', borderWidth: 2, showLine: false, order: 1,
   };

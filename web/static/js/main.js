@@ -24,9 +24,9 @@ function bindSlider(numberId, sliderId) {
 ].forEach(([n, s]) => bindSlider(n, s));
 
 // ── Chart helpers ─────────────────────────────────────────────────────────────
-const GRID_CLR  = "rgba(100,100,160,0.15)";
-const TEXT_CLR  = "#8888bb";
-const GOAL_DEPTH_M = 1.059; // hexagonal opening diameter = 41.7 in
+const GRID_CLR    = "rgba(100,100,160,0.15)";
+const TEXT_CLR    = "#8888bb";
+const GOAL_RADIUS_M = 0.530; // hexagonal opening radius = 41.7 in / 2
 
 function destroyChart(id) {
   const c = Chart.getChart(id); if (c) c.destroy();
@@ -77,8 +77,8 @@ async function runSimulate() {
   box.className = "result-box " + (data.hit ? "hit" : "miss");
   box.innerHTML = `
     <strong>${data.hit ? "✓ HIT" : "✗ MISS"}</strong><br/>
-    Y at goal: <strong>${data.y_final} m</strong><br/>
-    Goal window: ${data.goal_low} – ${data.goal_high} m<br/>
+    Entry x: <strong>${data.x_final.toFixed(3)} m</strong><br/>
+    Goal opening: ${data.goal_x_near.toFixed(2)} – ${data.goal_x_far.toFixed(2)} m<br/>
     Time of flight: ${data.tof} s
   `;
   box.classList.remove("hidden");
@@ -91,18 +91,21 @@ function drawSingleTrajectory(data, dist) {
   destroyChart("trajectoryChart");
   const ctx = document.getElementById("trajectoryChart").getContext("2d");
 
-  const pts = data.trajectory_x.map((x, i) => ({ x, y: data.trajectory_y[i] }));
-  const goalH = (data.goal_low + data.goal_high) / 2;
-  const xMax  = dist + 0.8;
+  const pts  = data.trajectory_x.map((x, i) => ({ x, y: data.trajectory_y[i] }));
+  const rimH = data.rim_height;
+  const goalR = GOAL_RADIUS_M;
+  const xMax  = dist + goalR + 0.6;
 
   new Chart(ctx, {
     type: "scatter",
     data: {
       datasets: [
-        goalHeightLine(goalH, xMax),
-        goalBar(dist, goalH),
-        verticalDrop(dist, data.y_final),
-        impactCircle(dist, data.y_final),
+        rimHeightLine(rimH, xMax),
+        goalRimBar(dist, rimH, goalR),
+        nearRimLine(dist, rimH, goalR),
+        farRimLine(dist, rimH, goalR),
+        verticalDrop(data.x_final, rimH),
+        impactCircle(data.x_final, rimH),
         {
           label: data.hit ? "Ball path (HIT ✓)" : "Ball path (MISS ✗)",
           data: pts,
@@ -157,14 +160,16 @@ function drawShotFan(fan) {
   destroyChart("trajectoryChart");
   const ctx = document.getElementById("trajectoryChart").getContext("2d");
 
-  const dist   = fan.distance;
-  const goalH  = fan.goal_height;
-  const goalLo = fan.goal_low;
-  const goalHi = fan.goal_high;
-  const xMax   = dist + 0.8;
+  const dist     = fan.distance;
+  const rimH     = fan.rim_height;
+  const goalNear = fan.goal_x_near;
+  const goalFar  = fan.goal_x_far;
+  const goalR    = (goalFar - goalNear) / 2;
+  const xMax     = dist + goalR + 0.6;
 
   const datasets = fan.trajectories.map(s => {
-    const t   = Math.max(0, Math.min(1, (s.y_final - goalLo) / (goalHi - goalLo)));
+    // Color by where in the opening the ball entered (near rim = red, far rim = green)
+    const t   = Math.max(0, Math.min(1, (s.x_final - goalNear) / (goalFar - goalNear)));
     const hue = Math.round(t * 120);
     return {
       data: s.tx.map((x, i) => ({ x, y: s.ty[i] })),
@@ -173,6 +178,11 @@ function drawShotFan(fan) {
     };
   });
 
+  datasets.push(rimHeightLine(rimH, xMax));
+  datasets.push(goalRimBar(dist, rimH, goalR));
+  datasets.push(nearRimLine(dist, rimH, goalR));
+  datasets.push(farRimLine(dist, rimH, goalR));
+
   if (fan.optimal) {
     const o = fan.optimal;
     datasets.push({
@@ -180,12 +190,9 @@ function drawShotFan(fan) {
       data: o.tx.map((x, i) => ({ x, y: o.ty[i] })),
       borderColor: "#4488ee", showLine: true, pointRadius: 0, borderWidth: 3, order: 1,
     });
-    datasets.push(goalBar(dist, goalH));
-    datasets.push(verticalDrop(dist, o.y_final));
-    datasets.push(impactCircle(dist, o.y_final));
+    datasets.push(verticalDrop(o.x_final, rimH));
+    datasets.push(impactCircle(o.x_final, rimH));
   }
-
-  datasets.push(goalHeightLine(goalH, xMax));
 
   new Chart(ctx, {
     type: "scatter",
@@ -266,34 +273,48 @@ function drawValidRegionFilled(shots, optimal) {
   box.classList.remove("hidden");
 }
 
-// ── Goal indicator dataset factories ─────────────────────────────────────────
-function goalHeightLine(goalH, xMax) {
+// ── Goal indicator dataset factories (top-loading opening) ───────────────────
+function rimHeightLine(rimH, xMax) {
   return {
-    label: "Goal height",
-    data: [{ x: 0, y: goalH }, { x: xMax, y: goalH }],
-    borderColor: "rgba(220,60,60,0.55)", borderDash: [9, 5],
+    label: "Rim height",
+    data: [{ x: 0, y: rimH }, { x: xMax, y: rimH }],
+    borderColor: "rgba(220,60,60,0.30)", borderDash: [9, 5],
+    showLine: true, pointRadius: 0, borderWidth: 1, order: 5,
+  };
+}
+function goalRimBar(dist, rimH, goalR) {
+  return {
+    label: "Goal opening",
+    data: [{ x: dist - goalR, y: rimH }, { x: dist + goalR, y: rimH }],
+    borderColor: "rgba(60,200,80,0.95)",
+    showLine: true, pointRadius: 0, borderWidth: 6, order: 2,
+  };
+}
+function nearRimLine(dist, rimH, goalR) {
+  return {
+    data: [{ x: dist - goalR, y: 0 }, { x: dist - goalR, y: rimH }],
+    borderColor: "rgba(60,200,80,0.40)",
     showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
 }
-function goalBar(dist, goalH) {
+function farRimLine(dist, rimH, goalR) {
   return {
-    label: "Goal opening",
-    data: [{ x: dist, y: goalH }, { x: dist + GOAL_DEPTH_M, y: goalH }],
-    borderColor: "rgba(60,200,80,0.95)",
-    showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
+    data: [{ x: dist + goalR, y: 0 }, { x: dist + goalR, y: rimH }],
+    borderColor: "rgba(60,200,80,0.40)",
+    showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
 }
-function verticalDrop(dist, yFinal) {
+function verticalDrop(xFinal, rimH) {
   return {
-    data: [{ x: dist, y: 0 }, { x: dist, y: yFinal }],
+    data: [{ x: xFinal, y: 0 }, { x: xFinal, y: rimH }],
     borderColor: "rgba(220,60,60,0.75)",
     showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
 }
-function impactCircle(dist, yFinal) {
+function impactCircle(xFinal, rimH) {
   return {
     label: "Impact",
-    data: [{ x: dist, y: yFinal }],
+    data: [{ x: xFinal, y: rimH }],
     backgroundColor: "rgba(0,0,0,0)", borderColor: "white",
     pointRadius: 7, pointStyle: "circle", borderWidth: 2, showLine: false, order: 1,
   };

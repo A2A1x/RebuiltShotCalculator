@@ -12,7 +12,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
-from physics import simulate_shot, find_valid_shots, select_optimal_shot, GOAL_HEIGHT, GOAL_RADIUS, SHOOTER_HEIGHT
+from physics import simulate_shot, find_valid_shots, select_optimal_shot, GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, SHOOTER_HEIGHT
 from shot_table import ShotTableGenerator, ShotPolynomialSolver, TuningParams
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -43,12 +43,15 @@ def api_simulate():
         include_drag=bool(data.get("drag", True)),
         include_magnus=bool(data.get("magnus", True)),
     )
+    dist = float(data["distance"])
     return jsonify({
         "hit": bool(result.hit),
+        "x_final": round(float(result.x_final), 4),
         "y_final": round(float(result.y_final), 4),
         "tof": round(float(result.time_of_flight), 4),
-        "goal_low": round(GOAL_HEIGHT - GOAL_RADIUS, 4),
-        "goal_high": round(GOAL_HEIGHT + GOAL_RADIUS, 4),
+        "rim_height":  round(RIM_HEIGHT, 4),
+        "goal_x_near": round(dist - GOAL_RADIUS, 4),
+        "goal_x_far":  round(dist + GOAL_RADIUS, 4),
         "trajectory_x": result.trajectory_x.tolist()[::3],
         "trajectory_y": result.trajectory_y.tolist()[::3],
     })
@@ -101,6 +104,7 @@ def api_shot_fan():
         return {
             "tx": r.trajectory_x[::step].tolist(),
             "ty": r.trajectory_y[::step].tolist(),
+            "x_final": round(float(r.x_final), 4),
             "y_final": round(float(r.y_final), 4),
         }
 
@@ -125,9 +129,9 @@ def api_shot_fan():
     return jsonify({
         "trajectories": trajectories,
         "optimal": opt_traj,
-        "goal_height": round(GOAL_HEIGHT, 4),
-        "goal_low":    round(GOAL_HEIGHT - GOAL_RADIUS, 4),
-        "goal_high":   round(GOAL_HEIGHT + GOAL_RADIUS, 4),
+        "rim_height":  round(RIM_HEIGHT, 4),
+        "goal_x_near": round(dist - GOAL_RADIUS, 4),
+        "goal_x_far":  round(dist + GOAL_RADIUS, 4),
         "distance": dist,
     })
 
