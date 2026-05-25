@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FRC 2026 Shot Calculator</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="header-left">
+      <span class="header-title">FRC 2026 — Rebuilt Shot Calculator</span>
+      <span class="header-sub">Physics: Drag + Magnus · frc4414 optimizer · 1690 poly solver · Fully client-side</span>
+    </div>
+    <div class="header-right">
+      <span class="badge">GitHub Pages</span>
+    </div>
+  </header>
+
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="simulate">Shot Simulation</button>
+    <button class="tab-btn" data-tab="table">Shot Table</button>
+    <button class="tab-btn" data-tab="lookup">Live Lookup</button>
+  </nav>
+
+  <!-- ── Tab: Simulate ──────────────────────────────────────────────────── -->
+  <div id="tab-simulate" class="tab-content active">
+    <div class="panel-row">
+
+      <div class="panel controls-panel">
+        <h3>Shot Parameters</h3>
+
+        <div class="form-group">
+          <label>Distance (m)</label>
+          <div class="input-row">
+            <input type="number" id="sim-dist"    value="5.0" step="0.1" min="0.5" max="12" />
+            <input type="range"  id="sim-dist-sl" value="5.0" min="0.5" max="12" step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Exit Speed (m/s)</label>
+          <div class="input-row">
+            <input type="number" id="sim-speed"    value="8.0" step="0.1" min="2" max="25" />
+            <input type="range"  id="sim-speed-sl" value="8.0" min="2" max="25" step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Launch Angle (°)</label>
+          <div class="input-row">
+            <input type="number" id="sim-angle"    value="30.0" step="0.5" min="5" max="80" />
+            <input type="range"  id="sim-angle-sl" value="30.0" min="5" max="80" step="0.5" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Robot Radial Vel (m/s)</label>
+          <div class="input-row">
+            <input type="number" id="sim-rv"    value="0.0" step="0.1" min="-4" max="4" />
+            <input type="range"  id="sim-rv-sl" value="0.0" min="-4" max="4" step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Spin Rate (rps)</label>
+          <div class="input-row">
+            <input type="number" id="sim-spin"    value="50" step="1" min="0" max="120" />
+            <input type="range"  id="sim-spin-sl" value="50" min="0" max="120" step="1" />
+          </div>
+        </div>
+
+        <h3 style="margin-top:16px">Physics</h3>
+        <label class="checkbox-row"><input type="checkbox" id="sim-drag"   checked /> Aerodynamic Drag</label>
+        <label class="checkbox-row"><input type="checkbox" id="sim-magnus" checked /> Magnus Effect (backspin)</label>
+
+        <div class="btn-group" style="margin-top:16px">
+          <button class="btn btn-primary"   onclick="runSimulate()">Simulate Shot</button>
+          <button class="btn btn-secondary" onclick="runValidRegion()">Valid Region</button>
+        </div>
+
+        <div id="sim-result" class="result-box hidden"></div>
+      </div>
+
+      <div class="panel chart-panel">
+        <div class="chart-tabs">
+          <button class="chart-tab-btn active" data-ctab="trajectory" onclick="switchChartTab('trajectory')">Trajectory</button>
+          <button class="chart-tab-btn"        data-ctab="region"     onclick="switchChartTab('region')">Valid Region</button>
+        </div>
+        <div id="ctab-trajectory" class="chart-tab-content active">
+          <canvas id="trajectoryChart"></canvas>
+          <p class="chart-empty">Hit <strong>Simulate Shot</strong> to draw a trajectory.</p>
+        </div>
+        <div id="ctab-region" class="chart-tab-content">
+          <canvas id="regionChart"></canvas>
+          <p class="chart-empty">Hit <strong>Valid Region</strong> to see the scoring envelope.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Tab: Table ─────────────────────────────────────────────────────── -->
+  <div id="tab-table" class="tab-content">
+    <div class="panel-row">
+
+      <div class="panel controls-panel">
+        <h3>Generation Config</h3>
+        <div class="form-group">
+          <label>Distance Range (m)</label>
+          <div class="input-row">
+            <input type="number" id="tbl-dmin" value="1.5" step="0.1" style="width:68px" />
+            <span style="color:#666">–</span>
+            <input type="number" id="tbl-dmax" value="8.0" step="0.1" style="width:68px" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Distance Steps</label>
+          <input type="number" id="tbl-dsteps" value="20" min="5" max="50" />
+        </div>
+        <div class="form-group">
+          <label>Radial Vel Steps</label>
+          <input type="number" id="tbl-rvsteps" value="7" min="3" max="15" />
+        </div>
+
+        <h3 style="margin-top:16px">Tuning</h3>
+        <div class="form-group">
+          <label>Hood Angle Offset (°)</label>
+          <div class="input-row">
+            <input type="number" id="tbl-hood"    value="0.0" step="0.5" min="-15" max="15" />
+            <input type="range"  id="tbl-hood-sl" value="0"   min="-15" max="15" step="0.5" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>MPS Factor</label>
+          <div class="input-row">
+            <input type="number" id="tbl-mps"    value="1.0" step="0.01" min="0.5" max="2.0" />
+            <input type="range"  id="tbl-mps-sl" value="1.0" min="0.5" max="2.0" step="0.01" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Spin Rate (rps)</label>
+          <div class="input-row">
+            <input type="number" id="tbl-spin"    value="50" step="1" min="0" max="120" />
+            <input type="range"  id="tbl-spin-sl" value="50" min="0" max="120" step="1" />
+          </div>
+        </div>
+
+        <h3 style="margin-top:16px">Physics</h3>
+        <label class="checkbox-row"><input type="checkbox" id="tbl-drag"   checked /> Aerodynamic Drag</label>
+        <label class="checkbox-row"><input type="checkbox" id="tbl-magnus" checked /> Magnus Effect</label>
+
+        <button id="tbl-generate-btn" class="btn btn-primary"
+                onclick="generateTable()" style="width:100%;margin-top:16px">
+          Generate Shot Table
+        </button>
+
+        <div id="tbl-progress-wrap" class="hidden" style="margin-top:12px">
+          <div class="progress-bar-bg">
+            <div id="tbl-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <span id="tbl-progress-label" style="font-size:12px;color:#888">0%</span>
+        </div>
+
+        <div class="btn-group" style="margin-top:10px">
+          <button class="btn btn-secondary" onclick="exportTable()" style="flex:1">Export JSON</button>
+          <button class="btn btn-secondary" onclick="importTable()" style="flex:1">Import JSON</button>
+        </div>
+
+        <div id="tbl-status" class="result-box hidden"></div>
+
+        <div class="tuning-note">
+          <strong>Two-parameter tuning:</strong><br/>
+          Hood offset: measure from slow-mo video, constant across all distances.<br/>
+          MPS factor: nudge until shots go in — one knob fixes the entire range.
+        </div>
+      </div>
+
+      <div class="panel chart-panel">
+        <div class="chart-tabs">
+          <button class="chart-tab-btn active" data-ttab="heatspeed" onclick="switchTableTab('heatspeed')">Speed Map</button>
+          <button class="chart-tab-btn"        data-ttab="heatangle" onclick="switchTableTab('heatangle')">Angle Map</button>
+          <button class="chart-tab-btn"        data-ttab="heattol"   onclick="switchTableTab('heattol')">Tolerance</button>
+          <button class="chart-tab-btn"        data-ttab="polycurves" onclick="switchTableTab('polycurves')">Poly Curves</button>
+        </div>
+        <div id="ttab-heatspeed"  class="chart-tab-content active">
+          <canvas id="heatSpeedChart"></canvas>
+          <p id="heatspeed-empty"  class="chart-empty">Generate a table to see the speed map.</p>
+        </div>
+        <div id="ttab-heatangle"  class="chart-tab-content">
+          <canvas id="heatAngleChart"></canvas>
+          <p id="heatangle-empty"  class="chart-empty">Generate a table to see the angle map.</p>
+        </div>
+        <div id="ttab-heattol"    class="chart-tab-content">
+          <canvas id="heatTolChart"></canvas>
+          <p id="heattol-empty"    class="chart-empty">Generate a table to see shot tolerance.</p>
+        </div>
+        <div id="ttab-polycurves" class="chart-tab-content">
+          <canvas id="polyCurvesChart"></canvas>
+          <p id="polycurves-empty" class="chart-empty">Generate a table to see polynomial curves.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Tab: Lookup ────────────────────────────────────────────────────── -->
+  <div id="tab-lookup" class="tab-content">
+    <div class="panel-row">
+
+      <div class="panel controls-panel" style="max-width:320px">
+        <h3>Query Shot</h3>
+        <div class="form-group">
+          <label>Distance (m)</label>
+          <div class="input-row">
+            <input type="number" id="lkp-dist"    value="5.0" step="0.1" min="0.5" max="12" />
+            <input type="range"  id="lkp-dist-sl" value="5.0" min="0.5" max="12" step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Radial Velocity (m/s)</label>
+          <div class="input-row">
+            <input type="number" id="lkp-rv"    value="0.0" step="0.1" min="-4" max="4" />
+            <input type="range"  id="lkp-rv-sl" value="0.0" min="-4" max="4" step="0.1" />
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="doLookup()" style="width:100%;margin-top:12px">Get Shot</button>
+        <p style="font-size:12px;color:#666;margin-top:8px">
+          Tuning values are read from the Shot Table tab.<br/>Generate a table first.
+        </p>
+      </div>
+
+      <div class="panel" style="flex:1;min-width:0">
+        <h3>Result</h3>
+        <div id="lookup-result" class="lookup-result-box">
+          <span style="color:#555">Generate a table, then query here.</span>
+        </div>
+
+        <h3 style="margin-top:24px">Polynomial Curves</h3>
+        <canvas id="lookupPolyChart" style="max-height:280px"></canvas>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="physics.js"></script>
+  <script src="shot_table.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
