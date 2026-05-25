@@ -3,12 +3,15 @@
 
 const PHYSICS = (() => {
   // ── 2026 game geometry (meters) ─────────────────────────────────────────
-  // Update these to match your robot and the 2026 game piece.
-  const GOAL_HEIGHT = 2.44;
-  const GOAL_RADIUS = 0.305;
-  const BALL_RADIUS = 0.120;
-  const BALL_MASS   = 0.235;
-  const SHOOTER_HEIGHT = 0.90;
+  // Front lip of hexagonal hub opening: 72 in = 1.83 m
+  // Opening diameter: 41.7 in = 1.059 m  →  radius = 0.530 m
+  // Goal center height = lip + radius = 1.83 + 0.530 = 2.36 m
+  // Shooter exit height: 21.5 in = 0.546 m
+  const GOAL_HEIGHT    = 2.36;
+  const GOAL_RADIUS    = 0.530;
+  const BALL_RADIUS    = 0.120;
+  const BALL_MASS      = 0.235;
+  const SHOOTER_HEIGHT = 0.546;
 
   // Aerodynamic constants
   const AIR_DENSITY    = 1.225;

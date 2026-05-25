@@ -26,7 +26,7 @@ function bindSlider(numberId, sliderId) {
 // ── Chart helpers ─────────────────────────────────────────────────────────────
 const GRID_CLR  = "rgba(100,100,160,0.15)";
 const TEXT_CLR  = "#8888bb";
-const GOAL_DEPTH_M = 0.61;
+const GOAL_DEPTH_M = 1.059; // hexagonal opening diameter = 41.7 in
 
 function destroyChart(id) {
   const c = Chart.getChart(id); if (c) c.destroy();

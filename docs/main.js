@@ -13,7 +13,7 @@ const intVal = id => parseInt($(id).value, 10);
 
 const GRID_CLR = 'rgba(100,100,160,0.15)';
 const TEXT_CLR = '#8888bb';
-const GOAL_DEPTH = 0.61;   // meters, goal front-to-back depth
+const GOAL_DEPTH = 1.059;  // meters, hexagonal opening diameter = 41.7 in
 
 function destroyChart(id) {
   const c = Chart.getChart(id); if (c) c.destroy();
