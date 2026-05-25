@@ -16,6 +16,7 @@ GOAL_HEIGHT = 2.36          # Height of goal opening center above floor (m)
                             # = front lip (1.83 m) + half opening diameter (0.530 m)
 GOAL_DEPTH = 1.059          # Front-to-back depth of hexagonal opening (m) = 41.7 in
 GOAL_RADIUS = 0.530         # Radius of hexagonal opening (m) = 41.7 in / 2
+RIM_HEIGHT = GOAL_HEIGHT - GOAL_RADIUS  # Front lip height = 1.83 m (72 in); ball must descend through this
 BALL_RADIUS = 0.120         # Ball radius (m) - adjust for 2026 game piece
 BALL_MASS = 0.235           # Ball mass (kg)
 BALL_MOMENT_INERTIA = 0.4 * BALL_MASS * BALL_RADIUS**2  # Solid sphere approx
@@ -88,13 +89,16 @@ def simulate_shot(
     traj_x = [x]
     traj_y = [y]
 
-    # Angular velocity of ball (rad/s), backspin = negative for topspin convention
-    omega = 2 * np.pi * spin_rps  # backspin produces upward Magnus on forward-moving ball
+    omega = 2 * np.pi * spin_rps
+
+    # Track when the ball descends back through the rim plane.
+    # SHOOTER_HEIGHT (0.546 m) < RIM_HEIGHT (1.83 m), so starts False.
+    was_above_rim = y >= RIM_HEIGHT
+    prev_x, prev_y = x, y
 
     while t < MAX_SIM_TIME:
         v = np.sqrt(vx**2 + vy**2)
 
-        # Drag force (opposes velocity)
         if include_drag and v > 0:
             drag_force = 0.5 * AIR_DENSITY * DRAG_COEFF * BALL_CROSS_SECTION * v**2
             ax_drag = -(drag_force / BALL_MASS) * (vx / v)
@@ -102,21 +106,15 @@ def simulate_shot(
         else:
             ax_drag = ay_drag = 0.0
 
-        # Magnus force (backspin on forward-moving ball → upward lift)
-        # F_magnus = C_L * rho * A * v * (omega_vec x v_hat)
         if include_magnus and v > 0:
             magnus_force = 0.5 * AIR_DENSITY * MAGNUS_COEFF * BALL_CROSS_SECTION * omega * BALL_RADIUS * v
-            # For backspin + forward motion: lift is upward
-            ax_magnus = 0.0
             ay_magnus = magnus_force / BALL_MASS
         else:
-            ax_magnus = ay_magnus = 0.0
+            ay_magnus = 0.0
 
-        ax = ax_drag + ax_magnus
-        ay = -GRAVITY + ay_drag + ay_magnus
-
-        vx += ax * DT
-        vy += ay * DT
+        vx += (ax_drag) * DT
+        vy += (-GRAVITY + ay_drag + ay_magnus) * DT
+        prev_x, prev_y = x, y
         x += vx * DT
         y += vy * DT
         t += DT
@@ -124,50 +122,40 @@ def simulate_shot(
         traj_x.append(x)
         traj_y.append(y)
 
-        # Check if ball has passed goal plane (x >= distance)
-        if x >= distance:
-            break
+        # Detect downward crossing of rim height — ball entering the top-loading opening
+        now_above_rim = y >= RIM_HEIGHT
+        if was_above_rim and not now_above_rim:
+            # Interpolate exact x where ball crossed y = RIM_HEIGHT
+            frac = (prev_y - RIM_HEIGHT) / (prev_y - y + 1e-12)
+            x_crossing = prev_x + frac * (x - prev_x)
 
-        # Ball hit the floor
+            x_near = distance - GOAL_RADIUS + BALL_RADIUS
+            x_far  = distance + GOAL_RADIUS - BALL_RADIUS
+            hit = x_near <= x_crossing <= x_far
+
+            return ShotResult(
+                hit=hit,
+                x_final=x_crossing,
+                y_final=RIM_HEIGHT,
+                time_of_flight=t,
+                trajectory_x=np.array(traj_x),
+                trajectory_y=np.array(traj_y),
+            )
+        was_above_rim = now_above_rim
+
         if y < 0:
             return ShotResult(
                 hit=False, x_final=x, y_final=y,
                 time_of_flight=t,
                 trajectory_x=np.array(traj_x),
-                trajectory_y=np.array(traj_y)
+                trajectory_y=np.array(traj_y),
             )
 
-    # Interpolate y at exact goal x
-    if len(traj_x) >= 2:
-        x_arr = np.array(traj_x)
-        y_arr = np.array(traj_y)
-        # Find the crossing point
-        idx = np.searchsorted(x_arr, distance)
-        if idx >= len(x_arr):
-            idx = len(x_arr) - 1
-        if idx > 0:
-            frac = (distance - x_arr[idx - 1]) / (x_arr[idx] - x_arr[idx - 1] + 1e-12)
-            y_at_goal = y_arr[idx - 1] + frac * (y_arr[idx] - y_arr[idx - 1])
-        else:
-            y_at_goal = y_arr[0]
-    else:
-        y_at_goal = y
-
-    # Goal opening: y must be between close rim and far rim height
-    close_rim_y = GOAL_HEIGHT - BALL_RADIUS
-    far_rim_y = GOAL_HEIGHT + BALL_RADIUS + GOAL_DEPTH * np.tan(np.radians(5))  # slight upward angle
-
-    # Simpler: ball must arrive within [GOAL_HEIGHT - GOAL_RADIUS, GOAL_HEIGHT + GOAL_RADIUS]
-    goal_low = GOAL_HEIGHT - GOAL_RADIUS + BALL_RADIUS
-    goal_high = GOAL_HEIGHT + GOAL_RADIUS - BALL_RADIUS
-
-    hit = goal_low <= y_at_goal <= goal_high
-
     return ShotResult(
-        hit=hit, x_final=distance, y_final=y_at_goal,
+        hit=False, x_final=x, y_final=y,
         time_of_flight=t,
         trajectory_x=np.array(traj_x),
-        trajectory_y=np.array(traj_y)
+        trajectory_y=np.array(traj_y),
     )
 
 
@@ -202,6 +190,7 @@ def find_valid_shots(
                 valid_shots.append({
                     "speed": speed,
                     "angle": angle,
+                    "x_final": result.x_final,
                     "y_final": result.y_final,
                     "tof": result.time_of_flight,
                 })

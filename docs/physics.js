@@ -9,6 +9,7 @@ const PHYSICS = (() => {
   // Shooter exit height: 21.5 in = 0.546 m
   const GOAL_HEIGHT    = 2.36;
   const GOAL_RADIUS    = 0.530;
+  const RIM_HEIGHT     = GOAL_HEIGHT - GOAL_RADIUS;  // = 1.83 m, front lip (72 in)
   const BALL_RADIUS    = 0.120;
   const BALL_MASS      = 0.235;
   const SHOOTER_HEIGHT = 0.546;
@@ -22,10 +23,6 @@ const PHYSICS = (() => {
   const GRAVITY      = 9.81;
   const DT           = 0.002;   // timestep (s) — 2ms keeps error small, runs fast
   const MAX_SIM_TIME = 3.0;
-
-  // Goal window ball must enter
-  const GOAL_LOW  = GOAL_HEIGHT - GOAL_RADIUS + BALL_RADIUS;
-  const GOAL_HIGH = GOAL_HEIGHT + GOAL_RADIUS - BALL_RADIUS;
 
   /**
    * Simulate one shot.
@@ -57,6 +54,9 @@ const PHYSICS = (() => {
     const trajX = storeTrajectory ? [x] : null;
     const trajY = storeTrajectory ? [y] : null;
 
+    // Ball starts below rim height; track when it descends back through it.
+    // SHOOTER_HEIGHT (0.546 m) < RIM_HEIGHT (1.83 m), so wasAbove starts false.
+    let wasAbove = y >= RIM_HEIGHT;
     let prevX = x, prevY = y;
 
     while (t < MAX_SIM_TIME) {
@@ -72,12 +72,11 @@ const PHYSICS = (() => {
       }
 
       if (magnus && v > 0) {
-        // Backspin on forward-moving ball → upward Magnus lift
         const fM = (0.5 * AIR_DENSITY * MAGNUS_COEFF * BALL_XSECTION * omega * BALL_RADIUS * v) / BALL_MASS;
         ayMagnus = fM;
       }
 
-      vx += (axDrag)           * DT;
+      vx += axDrag * DT;
       vy += (-GRAVITY + ayDrag + ayMagnus) * DT;
       prevX = x;  prevY = y;
       x  += vx * DT;
@@ -86,20 +85,25 @@ const PHYSICS = (() => {
 
       if (storeTrajectory) { trajX.push(x); trajY.push(y); }
 
-      if (y < 0) {
-        return { hit: false, yFinal: y, tof: t, trajX, trajY };
-      }
+      // Detect downward crossing of rim height — ball entering top-loading opening
+      const nowAbove = y >= RIM_HEIGHT;
+      if (wasAbove && !nowAbove) {
+        const frac = (prevY - RIM_HEIGHT) / (prevY - y + 1e-12);
+        const xCrossing = prevX + frac * (x - prevX);
 
-      if (x >= distance) {
-        // Interpolate exact y at goal plane
-        const frac = (distance - prevX) / (x - prevX + 1e-12);
-        const yAtGoal = prevY + frac * (y - prevY);
-        const hit = yAtGoal >= GOAL_LOW && yAtGoal <= GOAL_HIGH;
-        return { hit, yFinal: yAtGoal, tof: t, trajX, trajY };
+        const xNear = distance - GOAL_RADIUS + BALL_RADIUS;
+        const xFar  = distance + GOAL_RADIUS - BALL_RADIUS;
+        const hit = xCrossing >= xNear && xCrossing <= xFar;
+        return { hit, xFinal: xCrossing, yFinal: RIM_HEIGHT, tof: t, trajX, trajY };
+      }
+      wasAbove = nowAbove;
+
+      if (y < 0) {
+        return { hit: false, xFinal: x, yFinal: y, tof: t, trajX, trajY };
       }
     }
 
-    return { hit: false, yFinal: y, tof: t, trajX, trajY };
+    return { hit: false, xFinal: x, yFinal: y, tof: t, trajX, trajY };
   }
 
   /**
@@ -121,7 +125,7 @@ const PHYSICS = (() => {
           spinRps, robotRadialVel, drag, magnus,
           storeTrajectory: false,
         });
-        if (r.hit) valid.push({ speed, angle, yFinal: r.yFinal, tof: r.tof });
+        if (r.hit) valid.push({ speed, angle, xFinal: r.xFinal, yFinal: r.yFinal, tof: r.tof });
       }
     }
     return valid;
@@ -159,7 +163,7 @@ const PHYSICS = (() => {
   }
 
   return {
-    GOAL_HEIGHT, GOAL_RADIUS, GOAL_LOW, GOAL_HIGH, SHOOTER_HEIGHT,
+    GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, SHOOTER_HEIGHT,
     simulateShot, findValidShots, selectOptimalShot, std,
   };
 })();
