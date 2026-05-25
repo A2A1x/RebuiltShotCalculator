@@ -12,9 +12,10 @@ from typing import Optional
 # NOTE: Update these constants to match your robot's actual shooter geometry
 # and the 2026 game's goal dimensions.
 
-GOAL_HEIGHT = 2.44          # Height of goal opening center above floor (m)
-GOAL_DEPTH = 0.610          # Front-to-back depth of goal (m)
-GOAL_RADIUS = 0.305         # Inner radius of circular goal (m)
+GOAL_HEIGHT = 2.36          # Height of goal opening center above floor (m)
+                            # = front lip (1.83 m) + half opening diameter (0.530 m)
+GOAL_DEPTH = 1.059          # Front-to-back depth of hexagonal opening (m) = 41.7 in
+GOAL_RADIUS = 0.530         # Radius of hexagonal opening (m) = 41.7 in / 2
 BALL_RADIUS = 0.120         # Ball radius (m) - adjust for 2026 game piece
 BALL_MASS = 0.235           # Ball mass (kg)
 BALL_MOMENT_INERTIA = 0.4 * BALL_MASS * BALL_RADIUS**2  # Solid sphere approx
@@ -26,7 +27,7 @@ MAGNUS_COEFF = 0.20         # Magnus lift coefficient (tunable)
 BALL_CROSS_SECTION = np.pi * BALL_RADIUS**2
 
 # Shooter geometry
-SHOOTER_HEIGHT = 0.90       # Height of shooter exit above floor (m)
+SHOOTER_HEIGHT = 0.546      # Height of shooter exit above floor (m) = 21.5 in
 SPIN_RATE_RPS = 50.0        # Default backspin (rev/s) - tune empirically
 
 GRAVITY = 9.81              # m/s²
