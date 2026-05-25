@@ -1,5 +1,4 @@
-// Physics engine — JS port of src/physics.py
-// Ball flight with aerodynamic drag and Magnus (backspin) effect.
+// Physics engine — ball flight with aerodynamic drag and Magnus (backspin) effect.
 
 const PHYSICS = (() => {
   // ── 2026 game geometry (meters) ─────────────────────────────────────────

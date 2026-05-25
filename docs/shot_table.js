@@ -1,4 +1,4 @@
-// Shot table polynomial solver — JS port of src/shot_table.py
+// Shot table polynomial solver.
 // Polyfit via normal equations (Vandermonde^T × Vandermonde), solved with
 // Gauss-Jordan elimination.
 
