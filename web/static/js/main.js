@@ -317,7 +317,7 @@ function rimWalls(dist, rimH, wallTop, goalR) {
       showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
     },
     {
-      label: "Back wall (hit)",
+      label: "Back wall (miss)",
       data: [{ x: dist + goalR, y: rimH }, { x: dist + goalR, y: wallTop }],
       borderColor: "rgba(60,200,80,0.90)",
       showLine: true, pointRadius: 0, borderWidth: 5, order: 2,

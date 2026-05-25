@@ -99,12 +99,12 @@ const PHYSICS = (() => {
         }
       }
 
-      // Back wall: x-crossing at far rim while y in wall range → hit
+      // Back wall: x-crossing at far rim while y in wall range → miss
       if (prevX < backWallX && x >= backWallX) {
         const frac = (backWallX - prevX) / (x - prevX + 1e-12);
         const yAtWall = prevY + frac * (y - prevY);
         if (yAtWall >= RIM_HEIGHT && yAtWall <= WALL_TOP) {
-          return { hit: true, xFinal: backWallX, yFinal: yAtWall, tof: t, trajX, trajY };
+          return { hit: false, xFinal: backWallX, yFinal: yAtWall, tof: t, trajX, trajY };
         }
       }
 

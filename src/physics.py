@@ -139,13 +139,13 @@ def simulate_shot(
                     trajectory_y=np.array(traj_y),
                 )
 
-        # Back wall: x-crossing at far rim while y in wall range → hit
+        # Back wall: x-crossing at far rim while y in wall range → miss
         if prev_x < back_wall_x <= x:
             frac = (back_wall_x - prev_x) / (x - prev_x + 1e-12)
             y_at_wall = prev_y + frac * (y - prev_y)
             if RIM_HEIGHT <= y_at_wall <= WALL_TOP:
                 return ShotResult(
-                    hit=True, x_final=back_wall_x, y_final=y_at_wall,
+                    hit=False, x_final=back_wall_x, y_final=y_at_wall,
                     time_of_flight=t,
                     trajectory_x=np.array(traj_x),
                     trajectory_y=np.array(traj_y),
