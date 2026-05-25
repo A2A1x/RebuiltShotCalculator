@@ -16,7 +16,9 @@ GOAL_HEIGHT = 2.36          # Height of goal opening center above floor (m)
                             # = front lip (1.83 m) + half opening diameter (0.530 m)
 GOAL_DEPTH = 1.059          # Front-to-back depth of hexagonal opening (m) = 41.7 in
 GOAL_RADIUS = 0.530         # Radius of hexagonal opening (m) = 41.7 in / 2
-RIM_HEIGHT = GOAL_HEIGHT - GOAL_RADIUS  # Front lip height = 1.83 m (72 in); ball must descend through this
+RIM_HEIGHT  = GOAL_HEIGHT - GOAL_RADIUS  # Front lip height = 1.83 m (72 in); ball must descend through this
+WALL_HEIGHT = 4 * 0.0254                # 4 in rim walls above each rim edge = 0.1016 m
+WALL_TOP    = RIM_HEIGHT + WALL_HEIGHT  # Top of rim walls = 1.9316 m
 BALL_RADIUS = 0.120         # Ball radius (m) - adjust for 2026 game piece
 BALL_MASS = 0.235           # Ball mass (kg)
 BALL_MOMENT_INERTIA = 0.4 * BALL_MASS * BALL_RADIUS**2  # Solid sphere approx
@@ -96,6 +98,9 @@ def simulate_shot(
     was_above_rim = y >= RIM_HEIGHT
     prev_x, prev_y = x, y
 
+    front_wall_x = distance - GOAL_RADIUS
+    back_wall_x  = distance + GOAL_RADIUS
+
     while t < MAX_SIM_TIME:
         v = np.sqrt(vx**2 + vy**2)
 
@@ -121,6 +126,30 @@ def simulate_shot(
 
         traj_x.append(x)
         traj_y.append(y)
+
+        # Front wall: x-crossing at near rim while y in wall range → miss
+        if prev_x < front_wall_x <= x:
+            frac = (front_wall_x - prev_x) / (x - prev_x + 1e-12)
+            y_at_wall = prev_y + frac * (y - prev_y)
+            if RIM_HEIGHT <= y_at_wall <= WALL_TOP:
+                return ShotResult(
+                    hit=False, x_final=front_wall_x, y_final=y_at_wall,
+                    time_of_flight=t,
+                    trajectory_x=np.array(traj_x),
+                    trajectory_y=np.array(traj_y),
+                )
+
+        # Back wall: x-crossing at far rim while y in wall range → hit
+        if prev_x < back_wall_x <= x:
+            frac = (back_wall_x - prev_x) / (x - prev_x + 1e-12)
+            y_at_wall = prev_y + frac * (y - prev_y)
+            if RIM_HEIGHT <= y_at_wall <= WALL_TOP:
+                return ShotResult(
+                    hit=True, x_final=back_wall_x, y_final=y_at_wall,
+                    time_of_flight=t,
+                    trajectory_x=np.array(traj_x),
+                    trajectory_y=np.array(traj_y),
+                )
 
         # Detect downward crossing of rim height — ball entering the top-loading opening
         now_above_rim = y >= RIM_HEIGHT

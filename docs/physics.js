@@ -10,6 +10,8 @@ const PHYSICS = (() => {
   const GOAL_HEIGHT    = 2.36;
   const GOAL_RADIUS    = 0.530;
   const RIM_HEIGHT     = GOAL_HEIGHT - GOAL_RADIUS;  // = 1.83 m, front lip (72 in)
+  const WALL_HEIGHT    = 4 * 0.0254;                 // 4 in rim walls above each rim edge = 0.1016 m
+  const WALL_TOP       = RIM_HEIGHT + WALL_HEIGHT;   // top of rim walls = 1.9316 m
   const BALL_RADIUS    = 0.120;
   const BALL_MASS      = 0.235;
   const SHOOTER_HEIGHT = 0.546;
@@ -59,6 +61,9 @@ const PHYSICS = (() => {
     let wasAbove = y >= RIM_HEIGHT;
     let prevX = x, prevY = y;
 
+    const frontWallX = distance - GOAL_RADIUS;
+    const backWallX  = distance + GOAL_RADIUS;
+
     while (t < MAX_SIM_TIME) {
       const v2 = vx * vx + vy * vy;
       const v  = Math.sqrt(v2);
@@ -84,6 +89,24 @@ const PHYSICS = (() => {
       t  += DT;
 
       if (storeTrajectory) { trajX.push(x); trajY.push(y); }
+
+      // Front wall: x-crossing at near rim while y in wall range → miss
+      if (prevX < frontWallX && x >= frontWallX) {
+        const frac = (frontWallX - prevX) / (x - prevX + 1e-12);
+        const yAtWall = prevY + frac * (y - prevY);
+        if (yAtWall >= RIM_HEIGHT && yAtWall <= WALL_TOP) {
+          return { hit: false, xFinal: frontWallX, yFinal: yAtWall, tof: t, trajX, trajY };
+        }
+      }
+
+      // Back wall: x-crossing at far rim while y in wall range → hit
+      if (prevX < backWallX && x >= backWallX) {
+        const frac = (backWallX - prevX) / (x - prevX + 1e-12);
+        const yAtWall = prevY + frac * (y - prevY);
+        if (yAtWall >= RIM_HEIGHT && yAtWall <= WALL_TOP) {
+          return { hit: true, xFinal: backWallX, yFinal: yAtWall, tof: t, trajX, trajY };
+        }
+      }
 
       // Detect downward crossing of rim height — ball entering top-loading opening
       const nowAbove = y >= RIM_HEIGHT;
@@ -163,7 +186,7 @@ const PHYSICS = (() => {
   }
 
   return {
-    GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, SHOOTER_HEIGHT,
+    GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, WALL_HEIGHT, WALL_TOP, SHOOTER_HEIGHT,
     simulateShot, findValidShots, selectOptimalShot, std,
   };
 })();

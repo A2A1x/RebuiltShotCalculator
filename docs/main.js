@@ -109,9 +109,10 @@ function drawSingleTrajectory(result, dist) {
     pts.push({ x: result.trajX[i], y: result.trajY[i] });
   }
 
-  const rimH  = PHYSICS.RIM_HEIGHT;
-  const goalR = PHYSICS.GOAL_RADIUS;
-  const xMax  = dist + goalR + 0.6;
+  const rimH    = PHYSICS.RIM_HEIGHT;
+  const wallTop = PHYSICS.WALL_TOP;
+  const goalR   = PHYSICS.GOAL_RADIUS;
+  const xMax    = dist + goalR + 0.6;
 
   new Chart(ctx, {
     type: 'scatter',
@@ -121,8 +122,9 @@ function drawSingleTrajectory(result, dist) {
         goalRimBar(dist, rimH, goalR),
         nearRimLine(dist, rimH, goalR),
         farRimLine(dist, rimH, goalR),
-        verticalDrop(result.xFinal, rimH),
-        impactCircle(result.xFinal, rimH),
+        ...rimWalls(dist, rimH, wallTop, goalR),
+        verticalDrop(result.xFinal, result.yFinal),
+        impactCircle(result.xFinal, result.yFinal),
         {
           label: result.hit ? 'Ball path (HIT ✓)' : 'Ball path (MISS ✗)',
           data: pts,
@@ -170,10 +172,11 @@ function drawShotFan(valid, optimal, params) {
   destroyChart('trajectoryChart');
   const ctx = $('trajectoryChart').getContext('2d');
 
-  const dist  = params.distance;
-  const rimH  = PHYSICS.RIM_HEIGHT;
-  const goalR = PHYSICS.GOAL_RADIUS;
-  const xMax  = dist + goalR + 0.6;
+  const dist    = params.distance;
+  const rimH    = PHYSICS.RIM_HEIGHT;
+  const wallTop = PHYSICS.WALL_TOP;
+  const goalR   = PHYSICS.GOAL_RADIUS;
+  const xMax    = dist + goalR + 0.6;
 
   // Simulate every valid shot trajectory
   const simulated = valid.map(s => {
@@ -225,9 +228,10 @@ function drawShotFan(valid, optimal, params) {
   datasets.push(goalRimBar(dist, rimH, goalR));
   datasets.push(nearRimLine(dist, rimH, goalR));
   datasets.push(farRimLine(dist, rimH, goalR));
+  datasets.push(...rimWalls(dist, rimH, wallTop, goalR));
   if (optSim) {
-    datasets.push(verticalDrop(optSim.xFinal, rimH));
-    datasets.push(impactCircle(optSim.xFinal, rimH));
+    datasets.push(verticalDrop(optSim.xFinal, optSim.yFinal));
+    datasets.push(impactCircle(optSim.xFinal, optSim.yFinal));
   }
 
   new Chart(ctx, {
@@ -366,6 +370,24 @@ function farRimLine(dist, rimH, goalR) {
     borderColor: 'rgba(60,200,80,0.40)',
     showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3,
   };
+}
+
+// 4-inch walls above each rim edge — front (red = miss), back (green = hit)
+function rimWalls(dist, rimH, wallTop, goalR) {
+  return [
+    {
+      label: 'Front wall (miss)',
+      data: [{ x: dist - goalR, y: rimH }, { x: dist - goalR, y: wallTop }],
+      borderColor: 'rgba(220,60,60,0.90)',
+      showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
+    },
+    {
+      label: 'Back wall (hit)',
+      data: [{ x: dist + goalR, y: rimH }, { x: dist + goalR, y: wallTop }],
+      borderColor: 'rgba(60,200,80,0.90)',
+      showLine: true, pointRadius: 0, borderWidth: 5, order: 2,
+    },
+  ];
 }
 
 function verticalDrop(xFinal, rimH) {
