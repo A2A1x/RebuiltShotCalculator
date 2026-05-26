@@ -15,6 +15,7 @@ self.onmessage = function (e) {
     rvSteps  = 7,
     hoodAngleOffset = 0, mpsFactor = 1.0, spinRps = 50,
     drag = true, magnus = true,
+    ceilingHeight = null,
   } = cfg;
 
   const distances   = linspace(distMin, distMax, distSteps);
@@ -33,6 +34,7 @@ self.onmessage = function (e) {
         const valid = PHYSICS.findValidShots({
           distance: dist, robotRadialVel: rv, spinRps,
           drag, magnus,
+          ceilingHeight,
           speedSteps: 45, angleSteps: 45,
         });
         const optimal = PHYSICS.selectOptimalShot(valid);

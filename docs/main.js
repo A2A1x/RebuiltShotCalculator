@@ -46,7 +46,9 @@ function bindSlider(numId, slId) {
 [
   ['sim-dist','sim-dist-sl'],
   ['sim-rv','sim-rv-sl'],     ['sim-spin','sim-spin-sl'],
+  ['sim-ceiling','sim-ceiling-sl'],
   ['tbl-hood','tbl-hood-sl'], ['tbl-mps','tbl-mps-sl'],   ['tbl-spin','tbl-spin-sl'],
+  ['tbl-ceiling','tbl-ceiling-sl'],
   ['lkp-dist','lkp-dist-sl'], ['lkp-rv','lkp-rv-sl'],
 ].forEach(([n, s]) => bindSlider(n, s));
 
@@ -66,11 +68,14 @@ function switchTableTab(name) {
     c.classList.toggle('active', c.id === 'ttab-' + name));
 }
 
-// Sweep range used by the Simulate tab (Shot Table generation uses its own
-// broader defaults so it can find shots across all distances).
+// Sweep range used by the Simulate tab — full physics envelope so every
+// shot that scores is reported. (Shot Table generation passes its own
+// settings and is unaffected.)
 const SIM_SWEEP = {
-  speedRange: [7.5, 15.0],
-  angleRange: [35.0, 75.0],
+  speedRange: [5.0, 20.0],
+  angleRange: [10.0, 85.0],
+  speedSteps: 150,
+  angleSteps: 150,
 };
 
 // ── Simulate tab ───────────────────────────────────────────────────────────────
@@ -84,6 +89,7 @@ window.runSimulate = function () {
     spinRps:        val('sim-spin'),
     drag:           $('sim-drag').checked,
     magnus:         $('sim-magnus').checked,
+    ceilingHeight:  $('sim-ceiling-on').checked ? val('sim-ceiling') : null,
   };
 
   const box = $('sim-result');
@@ -168,6 +174,7 @@ window.runValidRegion = function () {
     spinRps:        val('sim-spin'),
     drag:           $('sim-drag').checked,
     magnus:         $('sim-magnus').checked,
+    ceilingHeight:  $('sim-ceiling-on').checked ? val('sim-ceiling') : null,
   };
 
   const valid   = PHYSICS.findValidShots({ ...params, ...SIM_SWEEP });
@@ -498,6 +505,7 @@ window.generateTable = function () {
     spinRps: val('tbl-spin'),
     drag:   $('tbl-drag').checked,
     magnus: $('tbl-magnus').checked,
+    ceilingHeight: $('tbl-ceiling-on').checked ? val('tbl-ceiling') : null,
   };
 
   const bar    = $('tbl-progress-bar');
@@ -588,6 +596,7 @@ function runTableInline(cfg, onProgress, onDone, onError) {
           const valid = PHYSICS.findValidShots({
             distance: dist, robotRadialVel: rv, spinRps: cfg.spinRps,
             drag: cfg.drag, magnus: cfg.magnus,
+            ceilingHeight: cfg.ceilingHeight,
             speedSteps: 45, angleSteps: 45,
           });
           const optimal = PHYSICS.selectOptimalShot(valid);

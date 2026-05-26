@@ -49,14 +49,22 @@
         <div class="form-group">
           <label>Spin Rate (rps)</label>
           <div class="input-row">
-            <input type="number" id="sim-spin"    value="15" step="1" min="0" max="25" />
-            <input type="range"  id="sim-spin-sl" value="15" min="0" max="25" step="1" />
+            <input type="number" id="sim-spin"    value="10" step="1" min="0" max="25" />
+            <input type="range"  id="sim-spin-sl" value="10" min="0" max="25" step="1" />
           </div>
         </div>
 
         <h3 style="margin-top:16px">Physics</h3>
         <label class="checkbox-row"><input type="checkbox" id="sim-drag"   checked /> Aerodynamic Drag</label>
         <label class="checkbox-row"><input type="checkbox" id="sim-magnus" checked /> Magnus Effect (backspin)</label>
+        <label class="checkbox-row"><input type="checkbox" id="sim-ceiling-on" /> Ceiling Limit</label>
+        <div class="form-group">
+          <label>Ceiling Height (m)</label>
+          <div class="input-row">
+            <input type="number" id="sim-ceiling"    value="3.0" step="0.1" min="0.5" max="20" />
+            <input type="range"  id="sim-ceiling-sl" value="3.0" min="0.5" max="20" step="0.1" />
+          </div>
+        </div>
 
         <div class="btn-group" style="margin-top:16px">
           <button class="btn btn-primary"   onclick="runSimulate()">Simulate Shot</button>
@@ -125,14 +133,22 @@
         <div class="form-group">
           <label>Spin Rate (rps)</label>
           <div class="input-row">
-            <input type="number" id="tbl-spin"    value="15" step="1" min="0" max="25" />
-            <input type="range"  id="tbl-spin-sl" value="15" min="0" max="25" step="1" />
+            <input type="number" id="tbl-spin"    value="10" step="1" min="0" max="25" />
+            <input type="range"  id="tbl-spin-sl" value="10" min="0" max="25" step="1" />
           </div>
         </div>
 
         <h3 style="margin-top:16px">Physics</h3>
         <label class="checkbox-row"><input type="checkbox" id="tbl-drag"   checked /> Aerodynamic Drag</label>
         <label class="checkbox-row"><input type="checkbox" id="tbl-magnus" checked /> Magnus Effect</label>
+        <label class="checkbox-row"><input type="checkbox" id="tbl-ceiling-on" /> Ceiling Limit</label>
+        <div class="form-group">
+          <label>Ceiling Height (m)</label>
+          <div class="input-row">
+            <input type="number" id="tbl-ceiling"    value="3.0" step="0.1" min="0.5" max="20" />
+            <input type="range"  id="tbl-ceiling-sl" value="3.0" min="0.5" max="20" step="0.1" />
+          </div>
+        </div>
 
         <button id="tbl-generate-btn" class="btn btn-primary"
                 onclick="generateTable()" style="width:100%;margin-top:16px">

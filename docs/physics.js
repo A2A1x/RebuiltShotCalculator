@@ -41,6 +41,7 @@ const PHYSICS = (() => {
     distance, exitSpeed, launchAngleDeg,
     spinRps = 50, robotRadialVel = 0,
     drag = true, magnus = true,
+    ceilingHeight = null,
     storeTrajectory = true,
   }) {
     const rad = launchAngleDeg * Math.PI / 180;
@@ -92,11 +93,19 @@ const PHYSICS = (() => {
 
       if (storeTrajectory) { trajX.push(x); trajY.push(y); }
 
-      // Front wall: x-crossing at near rim while y in wall range → miss
+      // Ceiling: any upward crossing of the ceiling plane invalidates the shot.
+      if (ceilingHeight != null && y >= ceilingHeight) {
+        const frac = (ceilingHeight - prevY) / (y - prevY + 1e-12);
+        const xAtCeiling = prevX + frac * (x - prevX);
+        return { hit: false, xFinal: xAtCeiling, yFinal: ceilingHeight, tof: t, trajX, trajY };
+      }
+
+      // Front wall extends from the carpet (y=0) up to WALL_TOP.
+      // Any x-crossing below WALL_TOP hits the wall → miss.
       if (prevX < frontWallX && x >= frontWallX) {
         const frac = (frontWallX - prevX) / (x - prevX + 1e-12);
         const yAtWall = prevY + frac * (y - prevY);
-        if (yAtWall >= RIM_HEIGHT && yAtWall <= WALL_TOP) {
+        if (yAtWall >= 0 && yAtWall <= WALL_TOP) {
           return { hit: false, xFinal: frontWallX, yFinal: yAtWall, tof: t, trajX, trajY };
         }
       }
@@ -139,6 +148,7 @@ const PHYSICS = (() => {
     speedRange = [5.0, 20.0], angleRange = [10.0, 70.0],
     speedSteps = 50, angleSteps = 50,
     drag = true, magnus = true,
+    ceilingHeight = null,
   }) {
     const valid = [];
     for (let si = 0; si < speedSteps; si++) {
@@ -148,6 +158,7 @@ const PHYSICS = (() => {
         const r = simulateShot({
           distance, exitSpeed: speed, launchAngleDeg: angle,
           spinRps, robotRadialVel, drag, magnus,
+          ceilingHeight,
           storeTrajectory: false,
         });
         if (r.hit) valid.push({ speed, angle, xFinal: r.xFinal, yFinal: r.yFinal, tof: r.tof });
