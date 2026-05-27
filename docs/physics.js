@@ -17,13 +17,15 @@ const PHYSICS = (() => {
 
   // Aerodynamic constants
   const AIR_DENSITY    = 1.225;
-  const DRAG_COEFF     = 0.47;
+  const DRAG_COEFF     = 0.55;
   const MAGNUS_COEFF   = 0.20;
   const BALL_XSECTION  = Math.PI * BALL_RADIUS * BALL_RADIUS;
 
   const GRAVITY      = 9.81;
   const DT           = 0.002;   // timestep (s) — 2ms keeps error small, runs fast
   const MAX_SIM_TIME = 3.0;
+  // Empirical spin decay rate (s⁻¹): ω(t) = ω₀·e^(−k·t). Tune against measured flight data.
+  const SPIN_DECAY_RATE = 0.5;
 
   /**
    * Simulate one shot.
@@ -51,7 +53,7 @@ const PHYSICS = (() => {
     let y  = SHOOTER_HEIGHT;
     let t  = 0.0;
 
-    const omega = 2 * Math.PI * spinRps;  // rad/s
+    let omega = 2 * Math.PI * spinRps;  // rad/s — decays in flight
 
     const trajX = storeTrajectory ? [x] : null;
     const trajY = storeTrajectory ? [y] : null;
@@ -84,8 +86,11 @@ const PHYSICS = (() => {
         ayMagnus = +fM * (vx / v);
       }
 
+      // Symplectic (semi-implicit) Euler: update velocity first, then position
+      // with the new velocity. Better energy conservation than forward Euler.
       vx += (axDrag + axMagnus) * DT;
       vy += (-GRAVITY + ayDrag + ayMagnus) * DT;
+      omega *= (1 - SPIN_DECAY_RATE * DT);
       prevX = x;  prevY = y;
       x  += vx * DT;
       y  += vy * DT;
