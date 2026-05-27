@@ -1276,11 +1276,13 @@ window.generateJava = function () {
     }).join(',\n');
 
   // terms[] initializer used inside evalPolyRaw
-  const termsInit = c.terms.map(([a, b]) => {
-    const expr = javaTermExpr(a, b);
-    const lbl  = termLabel(a, b).padEnd(maxLabelLen);
-    return `            ${expr.padEnd(10)}  // ${lbl}`;
-  }).join(',\n');
+  // Comma goes BEFORE the // comment so Java sees it as part of the code, not the comment.
+  const termsInit = c.terms.map(([a, b], i) => {
+    const expr  = javaTermExpr(a, b);
+    const lbl   = termLabel(a, b).padEnd(maxLabelLen);
+    const comma = i < c.terms.length - 1 ? ',' : ' ';
+    return `            ${expr.padEnd(10)}${comma} // ${lbl}`;
+  }).join('\n');
 
   // Pre-computed powers needed by the polynomial
   const needD2 = c.terms.some(([a])    => a >= 2);
