@@ -195,6 +195,15 @@ input[type="range"] {
   display: flex;
   gap: 4px;
   margin-bottom: 12px;
+  align-items: center;
+}
+
+.zoom-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  white-space: nowrap;
 }
 
 .chart-tab-btn {

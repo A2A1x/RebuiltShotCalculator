@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FRC 2026 Shot Calculator</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -78,6 +80,7 @@
         <div class="chart-tabs">
           <button class="chart-tab-btn active" data-ctab="trajectory" onclick="switchChartTab('trajectory')">Trajectory</button>
           <button class="chart-tab-btn"        data-ctab="region"     onclick="switchChartTab('region')">Valid Region</button>
+          <span class="zoom-hint">scroll to zoom · drag to pan · dbl-click to reset</span>
         </div>
         <div id="ctab-trajectory" class="chart-tab-content active">
           <canvas id="trajectoryChart"></canvas>
@@ -182,6 +185,7 @@
           <button class="chart-tab-btn"        data-ttab="heatangle" onclick="switchTableTab('heatangle')">Angle Map</button>
           <button class="chart-tab-btn"        data-ttab="heattol"   onclick="switchTableTab('heattol')">Tolerance</button>
           <button class="chart-tab-btn"        data-ttab="polycurves" onclick="switchTableTab('polycurves')">Poly Curves</button>
+          <span class="zoom-hint">scroll to zoom · drag to pan · dbl-click to reset</span>
         </div>
         <div id="ttab-heatspeed"  class="chart-tab-content active">
           <canvas id="heatSpeedChart"></canvas>

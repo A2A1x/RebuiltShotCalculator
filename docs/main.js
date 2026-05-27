@@ -26,6 +26,21 @@ const scaleBase = () => ({
   grid: { color: GRID_CLR }, ticks: { color: TEXT_CLR },
 });
 
+function zoomPluginOptions() {
+  return {
+    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
+    pan:  { enabled: true, mode: 'xy' },
+  };
+}
+
+// Double-click any chart canvas to reset its zoom.
+document.addEventListener('dblclick', e => {
+  const canvas = e.target.closest('canvas');
+  if (!canvas) return;
+  const chart = Chart.getChart(canvas);
+  if (chart && chart.resetZoom) chart.resetZoom();
+});
+
 // ── Tab navigation ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -349,6 +364,7 @@ function drawValidRegionFilled(valid, optimal) {
         legend: {
           labels: { color: TEXT_CLR, font: { size: 10 }, boxWidth: 14, padding: 10 },
         },
+        zoom: zoomPluginOptions(),
       },
       scales: {
         x: { ...scaleBase(), title: axisTitle('Launch Angle (°)') },
@@ -446,6 +462,7 @@ function trajectoryChartOptions(hideLegend = false) {
         ? { labels: { color: TEXT_CLR, font: { size: 10 },
             filter: item => !!item.text } }
         : { labels: { color: TEXT_CLR, font: { size: 10 } } },
+      zoom: zoomPluginOptions(),
     },
     scales: {
       x: { ...scaleBase(), title: axisTitle('Distance (m)') },
@@ -678,7 +695,10 @@ function drawLineMap(canvasId, dists, rvs, entries, field, yLabel, palette) {
   new Chart($(canvasId).getContext('2d'), {
     type: 'scatter', data: { datasets },
     options: { responsive: true, maintainAspectRatio: true, animation: false,
-      plugins: { legend: { labels: { color: TEXT_CLR, font: { size: 10 } } } },
+      plugins: {
+        legend: { labels: { color: TEXT_CLR, font: { size: 10 } } },
+        zoom: zoomPluginOptions(),
+      },
       scales: {
         x: { ...scaleBase(), title: axisTitle('Distance (m)') },
         y: { ...scaleBase(), title: axisTitle(yLabel) },
@@ -704,7 +724,10 @@ function drawTolMap(canvasId, dists, rvs, entries) {
   new Chart($(canvasId).getContext('2d'), {
     type: 'scatter', data: { datasets },
     options: { responsive: true, maintainAspectRatio: true, animation: false,
-      plugins: { legend: { labels: { color: TEXT_CLR, font: { size: 10 } } } },
+      plugins: {
+        legend: { labels: { color: TEXT_CLR, font: { size: 10 } } },
+        zoom: zoomPluginOptions(),
+      },
       scales: {
         x: { ...scaleBase(), title: axisTitle('Distance (m)') },
         y: { ...scaleBase(), title: axisTitle('Speed Tolerance σ (m/s)') },
@@ -740,7 +763,10 @@ function drawPolyCurves(canvasId) {
     type: 'scatter', data: { datasets },
     options: {
       responsive: true, maintainAspectRatio: true, animation: false,
-      plugins: { legend: { labels: { color: TEXT_CLR, font: { size: 10 }, boxWidth: 14 } } },
+      plugins: {
+        legend: { labels: { color: TEXT_CLR, font: { size: 10 }, boxWidth: 14 } },
+        zoom: zoomPluginOptions(),
+      },
       scales: {
         x:      { ...scaleBase(), title: axisTitle('Distance (m)') },
         ySpeed: { position:'left',  ...scaleBase(), title: axisTitle('Speed (m/s)') },
