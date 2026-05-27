@@ -508,24 +508,42 @@ function rimBoundaries(valid) {
   };
 }
 
-/** Speed range at optimal angle, angle range at optimal speed. */
+/** Speed range at optimal angle, angle range at optimal speed.
+ *  Derived directly from rimBoundaries so the crosshair endpoints align
+ *  exactly with the rim curves on the chart. */
 function shotTolerance(valid, optimal) {
-  const angles = [...new Set(valid.map(s => s.angle))].sort((a, b) => a - b);
-  const speeds = [...new Set(valid.map(s => s.speed))].sort((a, b) => a - b);
-  const aStep = angles.length > 1 ? (angles[angles.length-1] - angles[0]) / (angles.length-1) : 1;
-  const sStep = speeds.length > 1 ? (speeds[speeds.length-1] - speeds[0]) / (speeds.length-1) : 0.5;
+  const { lower, upper } = rimBoundaries(valid);
+  if (!lower.length) {
+    return { speedMin: optimal.speed, speedMax: optimal.speed,
+             angleMin: optimal.angle, angleMax: optimal.angle };
+  }
 
-  // Use half-step threshold to select only the single grid row/column at the
-  // optimal value — wider bands bleed into adjacent rows with different extents.
-  const atAngle = valid.filter(s => Math.abs(s.angle - optimal.angle) <= aStep * 0.5);
-  const atSpeed = valid.filter(s => Math.abs(s.speed - optimal.speed) <= sStep * 0.5);
+  // Speed range: rim bounds at the angle closest to optimal
+  const nearIdx = lower.reduce((bi, _, i) =>
+    Math.abs(lower[i].x - optimal.angle) < Math.abs(lower[bi].x - optimal.angle) ? i : bi, 0);
+  const speedMin = lower[nearIdx].y;
+  const speedMax = upper[nearIdx].y;
 
-  return {
-    speedMin: atAngle.length ? Math.min(...atAngle.map(s => s.speed)) : optimal.speed,
-    speedMax: atAngle.length ? Math.max(...atAngle.map(s => s.speed)) : optimal.speed,
-    angleMin: atSpeed.length ? Math.min(...atSpeed.map(s => s.angle)) : optimal.angle,
-    angleMax: atSpeed.length ? Math.max(...atSpeed.map(s => s.angle)) : optimal.angle,
-  };
+  // Angle range: every rim data point where optimal.speed is inside [close_rim, far_rim]
+  const rimStep = lower.length > 1
+    ? (lower[lower.length - 1].x - lower[0].x) / (lower.length - 1) : 1;
+  const validAngles = lower
+    .filter((lo, i) => optimal.speed >= lo.y && optimal.speed <= upper[i].y)
+    .map(lo => lo.x);
+
+  if (!validAngles.length) {
+    return { speedMin, speedMax, angleMin: optimal.angle, angleMax: optimal.angle };
+  }
+
+  // Keep only the contiguous segment that contains optimal.angle
+  const thresh = rimStep * 1.5;
+  const ci = validAngles.reduce((bi, a, i) =>
+    Math.abs(a - optimal.angle) < Math.abs(validAngles[bi] - optimal.angle) ? i : bi, 0);
+  let lo = ci, hi = ci;
+  while (lo > 0 && validAngles[lo] - validAngles[lo - 1] < thresh) lo--;
+  while (hi < validAngles.length - 1 && validAngles[hi + 1] - validAngles[hi] < thresh) hi++;
+
+  return { speedMin, speedMax, angleMin: validAngles[lo], angleMax: validAngles[hi] };
 }
 
 // ── Table tab ──────────────────────────────────────────────────────────────────
