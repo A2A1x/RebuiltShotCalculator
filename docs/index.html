@@ -8,6 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js@2.35.2/dist/plotly.min.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -23,13 +24,117 @@
   </header>
 
   <nav class="tab-bar">
-    <button class="tab-btn active" data-tab="simulate">Shot Simulation</button>
+    <button class="tab-btn active" data-tab="overview">Overview</button>
+    <button class="tab-btn" data-tab="simulate">Shot Simulation</button>
     <button class="tab-btn" data-tab="table">Shot Table</button>
     <button class="tab-btn" data-tab="lookup">Live Lookup</button>
+    <button class="tab-btn" data-tab="surface">Poly Surface</button>
   </nav>
 
+  <!-- ── Tab: Overview ─────────────────────────────────────────────────────────────────────────── -->
+  <div id="tab-overview" class="tab-content overview-tab active">
+    <div class="overview-layout">
+
+      <!-- ── Sidebar ───────────────────────────────────────────────────── -->
+      <div class="overview-sidebar">
+
+        <!-- Generation -->
+        <div class="panel ov-panel">
+          <h3>Table Generation</h3>
+          <div class="form-group">
+            <label>Distance Range (m)</label>
+            <div class="input-row">
+              <input type="number" id="ov-dmin" value="1.5" step="0.1" style="width:58px" />
+              <span style="color:#666">–</span>
+              <input type="number" id="ov-dmax" value="8.0" step="0.1" style="width:58px" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Distance Steps</label>
+            <input type="number" id="ov-dsteps" value="20" min="5" max="50" />
+          </div>
+          <div class="form-group">
+            <label>Radial Vel Steps</label>
+            <input type="number" id="ov-rvsteps" value="7" min="3" max="15" />
+          </div>
+
+          <div class="form-group" style="margin-top:4px">
+            <label>Spin (rps)</label>
+            <div class="input-row">
+              <input type="number" id="ov-spin"    value="10" step="1" min="0" max="25" style="width:58px" />
+              <input type="range"  id="ov-spin-sl" value="10" min="0"  max="25" step="1" />
+            </div>
+          </div>
+
+          <h3 style="margin-top:12px">Ceiling</h3>
+          <label class="checkbox-row">
+            <input type="checkbox" id="ov-ceiling-on" checked /> Ceiling Limit
+          </label>
+          <div class="form-group">
+            <label>Ceiling Height (m)</label>
+            <div class="input-row">
+              <input type="number" id="ov-ceiling"    value="3.0" step="0.1" min="0.5" max="20" style="width:58px" />
+              <input type="range"  id="ov-ceiling-sl" value="3.0" min="0.5"  max="20"  step="0.1" />
+            </div>
+          </div>
+
+          <button id="ov-generate-btn" class="btn btn-primary"
+                  onclick="generateFromOverview()" style="width:100%;margin-top:14px">
+            ▶ Generate Shot Table
+          </button>
+
+          <div id="ov-progress-wrap" class="hidden" style="margin-top:10px">
+            <div class="progress-bar-bg">
+              <div id="ov-progress-bar" class="progress-bar-fill"></div>
+            </div>
+            <span id="ov-progress-label" style="font-size:12px;color:#888">0%</span>
+          </div>
+
+          <div id="ov-status" class="result-box hidden"></div>
+        </div>
+
+        <!-- Export & Java -->
+        <div class="panel ov-panel">
+          <h3>Export</h3>
+          <div class="btn-group">
+            <button class="btn btn-secondary" onclick="exportTable()"       style="flex:1">JSON</button>
+            <button class="btn btn-secondary" onclick="importTable()"       style="flex:1">Import</button>
+          </div>
+          <div class="btn-group" style="margin-top:6px">
+            <button class="btn btn-secondary" onclick="exportPolynomials()" style="flex:1">Polys</button>
+            <button class="btn btn-secondary" onclick="copyPolynomials(this)" id="ov-copy-btn" style="flex:1">Copy</button>
+          </div>
+          <button class="btn btn-secondary" onclick="generateJava()" style="width:100%;margin-top:6px">☕ Generate Java</button>
+        </div>
+
+      </div><!-- /overview-sidebar -->
+
+      <!-- ── Surface column ─────────────────────────────────────────────── -->
+      <div class="overview-surface-col">
+        <div class="ov-surface-toolbar">
+          <div class="btn-group">
+            <button class="chart-tab-btn ov-mode-btn active" data-mode="speed"
+                    onclick="setOvSurfaceMode('speed')">Exit Speed</button>
+            <button class="chart-tab-btn ov-mode-btn" data-mode="angle"
+                    onclick="setOvSurfaceMode('angle')">Launch Angle</button>
+          </div>
+          <label class="checkbox-row" style="margin:0">
+            <input type="checkbox" id="ov-show-pts" checked onchange="drawOverviewSurface()" />
+            Data points
+          </label>
+          <span class="zoom-hint" style="margin-left:auto">drag to orbit · scroll to zoom · dbl-click to reset</span>
+        </div>
+        <div id="overviewSurfacePlot"></div>
+        <p id="ov-surface-empty" class="chart-empty" style="padding:100px 0">
+          Generate a shot table to see the 3D polynomial surface.
+        </p>
+      </div>
+
+    </div>
+  </div>
+
   <!-- ── Tab: Simulate ──────────────────────────────────────────────────── -->
-  <div id="tab-simulate" class="tab-content active">
+  <div id="tab-simulate" class="tab-content">
     <div class="panel-row">
 
       <div class="panel controls-panel">
@@ -177,6 +282,12 @@
           <button class="btn btn-secondary" onclick="exportTable()" style="flex:1">Export JSON</button>
           <button class="btn btn-secondary" onclick="importTable()" style="flex:1">Import JSON</button>
         </div>
+        <div class="btn-group" style="margin-top:6px">
+          <button class="btn btn-secondary" onclick="exportPolynomials()" style="flex:1">Export Polys</button>
+          <button class="btn btn-secondary" onclick="copyPolynomials(this)" style="flex:1" id="tbl-copy-btn">Copy Polys</button>
+        </div>
+        <button class="btn btn-secondary" onclick="generateJava()"
+                style="width:100%;margin-top:6px">☕ Generate Java</button>
 
         <div id="tbl-status" class="result-box hidden"></div>
 
@@ -193,6 +304,7 @@
           <button class="chart-tab-btn"        data-ttab="heatangle" onclick="switchTableTab('heatangle')">Angle Map</button>
           <button class="chart-tab-btn"        data-ttab="heattol"   onclick="switchTableTab('heattol')">Tolerance</button>
           <button class="chart-tab-btn"        data-ttab="polycurves" onclick="switchTableTab('polycurves')">Poly Curves</button>
+          <button class="chart-tab-btn"        data-ttab="coeffs"    onclick="switchTableTab('coeffs')">Coefficients</button>
           <span class="zoom-hint">scroll to zoom · drag to pan · dbl-click to reset</span>
         </div>
         <div id="ttab-heatspeed"  class="chart-tab-content active">
@@ -210,6 +322,11 @@
         <div id="ttab-polycurves" class="chart-tab-content">
           <canvas id="polyCurvesChart"></canvas>
           <p id="polycurves-empty" class="chart-empty">Generate a table to see polynomial curves.</p>
+        </div>
+        <div id="ttab-coeffs" class="chart-tab-content">
+          <div id="poly-coeffs-display">
+            <p class="chart-empty">Generate a table to see polynomial coefficients.</p>
+          </div>
         </div>
       </div>
 
@@ -259,6 +376,50 @@
         <canvas id="lookupPolyChart" style="max-height:280px"></canvas>
       </div>
 
+    </div>
+  </div>
+
+  <!-- ── Tab: Poly Surface ─────────────────────────────────────────────── -->
+  <div id="tab-surface" class="tab-content surface-tab">
+
+    <div class="panel surface-controls-panel">
+      <div class="surface-header">
+        <h3 style="margin:0">2D Polynomial Surface — f(distance, radial velocity)</h3>
+        <div class="surface-controls">
+          <div class="btn-group">
+            <button class="chart-tab-btn surface-mode-btn active" data-mode="speed"
+                    onclick="setPolySurfaceMode('speed')">Exit Speed</button>
+            <button class="chart-tab-btn surface-mode-btn" data-mode="angle"
+                    onclick="setPolySurfaceMode('angle')">Launch Angle</button>
+          </div>
+          <label class="checkbox-row" style="margin:0">
+            <input type="checkbox" id="surface-show-pts" checked
+                   onchange="drawPolySurface()" />
+            Show data points
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div id="polySurfacePlot"></div>
+    <p id="surface-empty" class="chart-empty" style="padding:80px 0">
+      Generate a shot table first, then come back here.
+    </p>
+
+  </div>
+
+  <!-- ── Java code modal ───────────────────────────────────────────────── -->
+  <div id="java-modal" class="modal-overlay hidden" onclick="onModalOverlayClick(event)">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span class="modal-title">☕ Generated Java — <span id="java-modal-filename"></span></span>
+        <div class="modal-actions">
+          <button class="btn btn-secondary btn-sm" id="java-copy-btn" onclick="copyModalCode()">Copy</button>
+          <button class="btn btn-secondary btn-sm" onclick="downloadModalCode()">Download</button>
+          <button class="btn btn-secondary btn-sm" onclick="closeCodeModal()">✕</button>
+        </div>
+      </div>
+      <pre id="java-modal-code" class="modal-code"></pre>
     </div>
   </div>
 

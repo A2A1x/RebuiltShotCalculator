@@ -48,6 +48,22 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     $('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'surface') {
+      const div = $('polySurfacePlot');
+      if (tableGenerated) {
+        // If Plotly already rendered (e.g. during table gen while tab was hidden),
+        // just resize to the now-visible container. Otherwise do a full draw.
+        if (div && div._fullLayout) Plotly.Plots.resize(div);
+        else drawPolySurface();
+      }
+    }
+    if (btn.dataset.tab === 'overview') {
+      const div = $('overviewSurfacePlot');
+      if (tableGenerated) {
+        if (div && div._fullLayout) Plotly.Plots.resize(div);
+        else drawOverviewSurface();
+      }
+    }
   });
 });
 
@@ -65,6 +81,7 @@ function bindSlider(numId, slId) {
   ['tbl-hood','tbl-hood-sl'], ['tbl-mps','tbl-mps-sl'],   ['tbl-spin','tbl-spin-sl'],
   ['tbl-ceiling','tbl-ceiling-sl'],
   ['lkp-dist','lkp-dist-sl'], ['lkp-rv','lkp-rv-sl'],     ['lkp-lateral','lkp-lateral-sl'],
+  ['ov-spin','ov-spin-sl'], ['ov-ceiling','ov-ceiling-sl'],
 ].forEach(([n, s]) => bindSlider(n, s));
 
 // ── Chart-tab switching (Simulate tab) ────────────────────────────────────────
@@ -573,26 +590,44 @@ window.generateTable = function () {
   bar.style.width = '0%'; label.textContent = '0%';
   status.classList.add('hidden');
   $('tbl-generate-btn').disabled = true;
+  if ($('ov-generate-btn')) $('ov-generate-btn').disabled = true;
+  if ($('ov-progress-wrap')) $('ov-progress-wrap').classList.remove('hidden');
+  if ($('ov-progress-bar'))  { $('ov-progress-bar').style.width = '0%'; }
+  if ($('ov-progress-label')) $('ov-progress-label').textContent = '0%';
+  if ($('ov-status')) $('ov-status').classList.add('hidden');
 
   const onProgress = pct => {
     bar.style.width = pct + '%';
     label.textContent = pct + '%';
+    if ($('ov-progress-bar'))  $('ov-progress-bar').style.width  = pct + '%';
+    if ($('ov-progress-label')) $('ov-progress-label').textContent = pct + '%';
   };
   const onDone = table => {
     bar.style.width = '100%'; label.textContent = '100% — Done';
     tableEntries = table;
-    solver = new SHOT_TABLE.ShotPolynomialSolver(2);
+    solver = new SHOT_TABLE.ShotPolynomialSolver(3);
     solver.fit(tableEntries);
     tableGenerated = true;
     activeWorker = null;
     $('tbl-generate-btn').disabled = false;
+    if ($('ov-generate-btn')) $('ov-generate-btn').disabled = false;
+    if ($('ov-progress-bar'))  $('ov-progress-bar').style.width = '100%';
+    if ($('ov-progress-label')) $('ov-progress-label').textContent = '100% — Done';
     const validCount = tableEntries.filter(e => e.validCount > 0).length;
+    if ($('ov-status')) {
+      $('ov-status').className = 'result-box info';
+      $('ov-status').innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · degree 3`;
+      $('ov-status').classList.remove('hidden');
+    }
     status.className = 'result-box info';
-    status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · Polynomials fitted (degree 2)`;
+    status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · 2D surface fitted (degree 3)`;
     status.classList.remove('hidden');
     drawTableCharts();
     drawPolyCurves('polyCurvesChart');
     drawPolyCurves('lookupPolyChart');
+    renderPolyCoeffs();
+    drawPolySurface();
+    drawOverviewSurface();
   };
   const onError = (msg, cellsDone) => {
     status.className = 'result-box miss';
@@ -600,6 +635,7 @@ window.generateTable = function () {
     status.classList.remove('hidden');
     activeWorker = null;
     $('tbl-generate-btn').disabled = false;
+    if ($('ov-generate-btn')) $('ov-generate-btn').disabled = false;
   };
 
   // Try Web Worker; if unavailable (e.g. file:// origin), fall back to inline.
@@ -816,15 +852,95 @@ function drawPolyCurves(canvasId) {
   });
 }
 
+// ── Polynomial coefficient helpers ────────────────────────────────────────────
+
+/** Human-readable label for a 2D monomial [d_exp, v_exp]. */
+function termLabel(a, b) {
+  const dPart = a === 0 ? '' : a === 1 ? 'd' : `d${a === 2 ? '²' : a === 3 ? '³' : '^' + a}`;
+  const vPart = b === 0 ? '' : b === 1 ? 'v' : `v${b === 2 ? '²' : b === 3 ? '³' : '^' + b}`;
+  if (!dPart && !vPart) return '1';
+  if (!dPart) return vPart;
+  if (!vPart) return dPart;
+  return `${dPart}·${vPart}`;
+}
+
+/** Render the 2D polynomial coefficient table into #poly-coeffs-display. */
+function renderPolyCoeffs() {
+  const display = $('poly-coeffs-display');
+  if (!display || !tableGenerated) return;
+
+  const c = solver.getCoefficients();
+  if (!c.terms.length) {
+    display.innerHTML = '<p class="chart-empty">Not enough data to fit polynomials.</p>';
+    return;
+  }
+
+  const rows = c.terms.map(([a, b], i) => `
+    <tr>
+      <td class="poly-term">${termLabel(a, b)}</td>
+      <td>[${a},${b}]</td>
+      <td class="poly-expr">${c.speedCoeffs[i] >= 0 ? '+' : ''}${c.speedCoeffs[i].toExponential(5)}</td>
+      <td class="poly-expr">${c.angleCoeffs[i] >= 0 ? '+' : ''}${c.angleCoeffs[i].toExponential(5)}</td>
+    </tr>`).join('');
+
+  display.innerHTML = `
+    <div class="coeffs-toolbar">
+      <span style="font-size:11px;color:var(--text-muted)">
+        Single degree-${c.degree} surface · d = distance (m) · v = radial velocity (m/s)
+        · f(d,v) = Σ coeff·dᵃ·vᵇ
+      </span>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="poly-coeff-table">
+        <thead>
+          <tr>
+            <th>Term</th>
+            <th>[a, b]</th>
+            <th>Speed coeff (m/s)</th>
+            <th>Angle coeff (°)</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 // ── Export / Import ────────────────────────────────────────────────────────────
 window.exportTable = function () {
   if (!tableGenerated) return;
-  const json = JSON.stringify({ table: tableEntries }, null, 2);
+  const json = JSON.stringify({
+    table:       tableEntries,
+    polynomials: solver.getCoefficients(),
+  }, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'shot_table.json';
   a.click();
+};
+
+window.exportPolynomials = function () {
+  if (!tableGenerated) return;
+  const json = JSON.stringify(solver.getCoefficients(), null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'shot_polynomials.json';
+  a.click();
+};
+
+window.copyPolynomials = function (btnEl) {
+  if (!tableGenerated) return;
+  const json = JSON.stringify(solver.getCoefficients(), null, 2);
+  navigator.clipboard.writeText(json).then(() => {
+    const btn = btnEl || $('tbl-copy-btn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }
+  }).catch(() => window.prompt('Copy polynomial JSON:', json));
 };
 
 window.importTable = function () {
@@ -838,12 +954,15 @@ window.importTable = function () {
       try {
         const data = JSON.parse(ev.target.result);
         tableEntries = data.table || data;
-        solver = new SHOT_TABLE.ShotPolynomialSolver(2);
+        solver = new SHOT_TABLE.ShotPolynomialSolver(3);
         solver.fit(tableEntries);
         tableGenerated = true;
         drawTableCharts();
         drawPolyCurves('polyCurvesChart');
         drawPolyCurves('lookupPolyChart');
+        renderPolyCoeffs();
+        drawPolySurface();
+        drawOverviewSurface();
         const status = $('tbl-status');
         status.className = 'result-box info';
         status.textContent = `Loaded ${tableEntries.length} entries from file.`;
@@ -921,3 +1040,457 @@ window.doLookup = function () {
 
   drawPolyCurves('lookupPolyChart');
 };
+
+// ── Poly Surface tab (Plotly 3D) ───────────────────────────────────────────────
+
+let polySurfaceMode = 'speed';
+let ovSurfaceMode   = 'speed';
+
+window.setPolySurfaceMode = function (mode) {
+  polySurfaceMode = mode;
+  document.querySelectorAll('.surface-mode-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === mode));
+  if (tableGenerated) drawPolySurface();
+};
+
+window.setOvSurfaceMode = function (mode) {
+  ovSurfaceMode = mode;
+  document.querySelectorAll('.ov-mode-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === mode));
+  if (tableGenerated) drawOverviewSurface();
+};
+
+/** Shared Plotly 3D surface renderer. */
+function _drawPlotlySurface(divId, emptyId, mode, showPts) {
+  const div   = $(divId);
+  const empty = $(emptyId);
+  if (!div) return;
+
+  if (!tableGenerated) {
+    div.style.display = 'none';
+    if (empty) empty.classList.remove('hidden');
+    return;
+  }
+
+  div.style.display = 'block';
+  if (empty) empty.classList.add('hidden');
+
+  // Measure the available height from the parent flex container.
+  // Plotly's autosize handles width reliably but ignores CSS-computed
+  // flex height — we must pass it explicitly via layout.height.
+  const plotH = div.parentElement ? div.parentElement.clientHeight - (div.offsetTop - div.parentElement.offsetTop) : 0;
+
+  const valid   = tableEntries.filter(e => e.validCount > 0);
+  const dists   = valid.map(e => e.distance);
+  const rvs     = valid.map(e => e.radialVelocity);
+  const distMin = Math.min(...dists), distMax = Math.max(...dists);
+  const rvMin   = Math.min(...rvs),   rvMax   = Math.max(...rvs);
+
+  const NX = 60, NY = 40;
+  const xArr = Array.from({ length: NX }, (_, i) =>
+    distMin + i * (distMax - distMin) / (NX - 1));
+  const yArr = Array.from({ length: NY }, (_, i) =>
+    rvMin   + i * (rvMax   - rvMin)   / (NY - 1));
+  const zSurf = yArr.map(rv =>
+    xArr.map(d => {
+      const r = solver.predict(d, rv);
+      return mode === 'speed' ? r.exitSpeed : r.launchAngle;
+    }));
+
+  const zLabel = mode === 'speed' ? 'Exit Speed (m/s)' : 'Launch Angle (°)';
+
+  const traces = [
+    {
+      type: 'surface',
+      x: xArr, y: yArr, z: zSurf,
+      colorscale: 'Plasma',
+      opacity: 0.94,
+      showscale: true,
+      colorbar: {
+        title: { text: mode === 'speed' ? 'm/s' : '°', font: { color: '#c7c9c7', size: 11 } },
+        tickfont: { color: '#c7c9c7', size: 10 },
+        bgcolor: 'rgba(0,0,0,0)',
+        bordercolor: 'rgba(60,0,100,0.6)',
+        thickness: 14, len: 0.72,
+      },
+      hovertemplate:
+        'dist: %{x:.2f} m<br>rv: %{y:.2f} m/s<br>' +
+        (mode === 'speed' ? 'speed: %{z:.3f} m/s' : 'angle: %{z:.2f}°') +
+        '<extra></extra>',
+    },
+  ];
+
+  if (showPts) {
+    traces.push({
+      type: 'scatter3d',
+      x: valid.map(e => e.distance),
+      y: valid.map(e => e.radialVelocity),
+      z: valid.map(e => mode === 'speed' ? e.exitSpeed : e.launchAngle),
+      mode: 'markers',
+      marker: { size: 4, color: '#ffffff', opacity: 0.85,
+                line: { color: '#101820', width: 1 } },
+      name: 'Table data',
+      hovertemplate:
+        'dist: %{x:.2f} m<br>rv: %{y:.2f} m/s<br>' +
+        (mode === 'speed' ? 'speed: %{z:.3f} m/s' : 'angle: %{z:.2f}°') +
+        '<extra>table point</extra>',
+    });
+  }
+
+  const axBase = {
+    color: '#c7c9c7',
+    gridcolor: 'rgba(124,127,171,0.22)',
+    zerolinecolor: 'rgba(124,127,171,0.4)',
+    backgroundcolor: 'rgba(24,34,45,0.75)',
+    showbackground: true,
+    tickfont: { color: '#c7c9c7', size: 10 },
+    titlefont: { color: '#c5b4e3', size: 11 },
+  };
+
+  const layout = {
+    autosize: true,
+    height: plotH > 80 ? plotH : undefined,
+    paper_bgcolor: '#101820',
+    font: { color: '#f6f2f4', family: 'Segoe UI, system-ui, sans-serif', size: 11 },
+    title: {
+      text: mode === 'speed'
+        ? 'Exit Speed — f(distance, radial_vel) [m/s]'
+        : 'Launch Angle — f(distance, radial_vel) [°]',
+      font: { size: 13, color: '#c5b4e3' },
+      pad: { t: 6 }, x: 0.5,
+    },
+    scene: {
+      bgcolor: '#101820',
+      xaxis: { ...axBase, title: 'Distance (m)' },
+      yaxis: { ...axBase, title: 'Radial Velocity (m/s)' },
+      zaxis: { ...axBase, title: zLabel },
+      camera: { eye: { x: 1.65, y: -1.75, z: 0.90 }, up: { x: 0, y: 0, z: 1 } },
+      aspectratio: { x: 1.5, y: 1.0, z: 0.75 },
+    },
+    margin: { l: 10, r: 10, t: 52, b: 10 },
+    legend: {
+      font: { color: '#c7c9c7', size: 10 },
+      bgcolor: 'rgba(16,24,32,0.7)',
+      bordercolor: '#3c0064', borderwidth: 1,
+      x: 0.01, y: 0.98,
+    },
+    modebar: { bgcolor: 'rgba(0,0,0,0)', color: '#7c7fab', activecolor: '#c5b4e3' },
+  };
+
+  const config = {
+    responsive: true, displaylogo: false,
+    modeBarButtonsToRemove: ['resetCameraLastSave3d'],
+  };
+
+  Plotly.react(div, traces, layout, config).then(() => {
+    // After the initial render, let the browser finish flex-layout recalculation
+    // then resize Plotly to fill any remaining gap.
+    requestAnimationFrame(() => Plotly.Plots.resize(div));
+  });
+}
+
+window.drawPolySurface = function () {
+  _drawPlotlySurface(
+    'polySurfacePlot', 'surface-empty',
+    polySurfaceMode,
+    $('surface-show-pts')?.checked ?? true
+  );
+};
+
+window.drawOverviewSurface = function () {
+  _drawPlotlySurface(
+    'overviewSurfacePlot', 'ov-surface-empty',
+    ovSurfaceMode,
+    $('ov-show-pts')?.checked ?? true
+  );
+};
+
+// ── Overview tab helpers ───────────────────────────────────────────────────────
+
+window.generateFromOverview = function () {
+  // Sync overview → table-tab inputs so Shot Table tab stays consistent
+  const map = {
+    'ov-dmin': 'tbl-dmin', 'ov-dmax': 'tbl-dmax',
+    'ov-dsteps': 'tbl-dsteps', 'ov-rvsteps': 'tbl-rvsteps',
+    'ov-spin': 'tbl-spin',
+    'ov-ceiling': 'tbl-ceiling',
+  };
+  for (const [src, dst] of Object.entries(map)) {
+    const s = $(src), d = $(dst);
+    if (s && d) d.value = s.value;
+  }
+  // Keep spin slider in sync
+  const spinSl = $('tbl-spin-sl');
+  if (spinSl) spinSl.value = $('ov-spin')?.value;
+  // Keep ceiling slider in sync
+  const ceilSl = $('tbl-ceiling-sl');
+  if (ceilSl) ceilSl.value = $('ov-ceiling')?.value;
+  // Ceiling is always forced on when generating from the Overview tab
+  if ($('tbl-ceiling-on')) $('tbl-ceiling-on').checked = true;
+
+  generateTable();
+};
+
+
+// ── Java code generation ───────────────────────────────────────────────────────
+
+/** Java expression for a single 2D monomial d^a * v^b (uses pre-computed d2/d3/v2/v3). */
+function javaTermExpr(a, b) {
+  const d = ['', 'd', 'd2', 'd3'];
+  const v = ['', 'v', 'v2', 'v3'];
+  const dp = a <= 3 ? d[a] : `Math.pow(d,${a})`;
+  const vp = b <= 3 ? v[b] : `Math.pow(v,${b})`;
+  if (a === 0 && b === 0) return '1.0';
+  if (a === 0) return vp;
+  if (b === 0) return dp;
+  return `${dp} * ${vp}`;
+}
+
+/** Format a coefficient for Java source: fixed-width scientific notation with sign. */
+function javaCoeff(c) {
+  return (c >= 0 ? ' ' : '') + c.toExponential(10) + (Number.isInteger(c) ? '' : '');
+}
+
+window.generateJava = function () {
+  if (!tableGenerated) {
+    alert('Generate a shot table first.');
+    return;
+  }
+
+  const c       = solver.getCoefficients();
+  const valid   = tableEntries.filter(e => e.validCount > 0);
+  const distMin = Math.min(...valid.map(e => e.distance));
+  const distMax = Math.max(...valid.map(e => e.distance));
+  const rvMin   = Math.min(...valid.map(e => e.radialVelocity));
+  const rvMax   = Math.max(...valid.map(e => e.radialVelocity));
+  const hood    = val('tbl-hood');
+  const mps     = val('tbl-mps');
+  const now     = new Date().toISOString().slice(0, 10);
+
+  // Coefficient arrays: one line per term with label comment
+  const maxLabelLen = Math.max(...c.terms.map(([a, b]) => termLabel(a, b).length));
+  const fmtCoeffLine = (coeffArr) =>
+    c.terms.map(([a, b], i) => {
+      const lbl = termLabel(a, b).padEnd(maxLabelLen);
+      return `        /* ${lbl} */  ${javaCoeff(coeffArr[i])}`;
+    }).join(',\n');
+
+  // terms[] initializer used inside evalPolyRaw
+  const termsInit = c.terms.map(([a, b]) => {
+    const expr = javaTermExpr(a, b);
+    const lbl  = termLabel(a, b).padEnd(maxLabelLen);
+    return `            ${expr.padEnd(10)}  // ${lbl}`;
+  }).join(',\n');
+
+  // Pre-computed powers needed by the polynomial
+  const needD2 = c.terms.some(([a])    => a >= 2);
+  const needD3 = c.terms.some(([a])    => a >= 3);
+  const needV2 = c.terms.some(([, b])  => b >= 2);
+  const needV3 = c.terms.some(([, b])  => b >= 3);
+  // Emit in dependency order: d2 before d3, v2 before v3
+  const precompute = [
+    needD2 ? '        double d2 = d * d;'   : '',
+    needV2 ? '        double v2 = v * v;'   : '',
+    needD3 ? '        double d3 = d2 * d;'  : '',
+    needV3 ? '        double v3 = v2 * v;'  : '',
+  ].filter(Boolean).join('\n');
+
+  const java =
+`// Generated by FRC 2026 Shot Calculator — ${now}
+// 2D degree-${c.degree} polynomial surface: f(distance_m, radialVel_ms) → {exitSpeed_ms, launchAngle_deg}
+// Monomials in order: ${c.terms.map(([a,b]) => termLabel(a,b)).join(', ')}
+
+public class ShotCalculator {
+
+    // ── Tuning (baked in at generation time) ─────────────────────────────────
+    private static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};   // degrees, added to angle
+    private static final double MPS_FACTOR      = ${mps.toFixed(6)};   // scales exit speed
+
+    // ── Fitted range — inputs are clamped to these bounds ────────────────────
+    private static final double DIST_MIN = ${distMin.toFixed(4)};  // metres
+    private static final double DIST_MAX = ${distMax.toFixed(4)};
+    private static final double RV_MIN   = ${rvMin.toFixed(4)};  // m/s
+    private static final double RV_MAX   = ${rvMax.toFixed(4)};
+
+    // ── Polynomial coefficients ───────────────────────────────────────────────
+    // Both arrays share the same monomial basis.
+    // f(d, v) = Σ COEFFS[i] · d^a[i] · v^b[i]
+    private static final double[] SPEED_COEFFS = {
+${fmtCoeffLine(c.speedCoeffs)}
+    };
+
+    private static final double[] ANGLE_COEFFS = {
+${fmtCoeffLine(c.angleCoeffs)}
+    };
+
+    // ── Result type ───────────────────────────────────────────────────────────
+
+    /** Immutable shot command returned by {@link #getShotParams}. */
+    public static final class ShotParameters {
+        /** Ball exit speed in m/s, pre-scaled by MPS_FACTOR. */
+        public final double exitSpeed;
+        /** Shooter launch angle in degrees, with HOOD_OFFSET_DEG applied. */
+        public final double launchAngle;
+        /**
+         * Yaw correction to apply before firing (degrees).
+         * Positive = aim left, negative = aim right.
+         * Zero when robot is not moving tangentially.
+         */
+        public final double yawOffset;
+
+        public ShotParameters(double exitSpeed, double launchAngle, double yawOffset) {
+            this.exitSpeed   = exitSpeed;
+            this.launchAngle = launchAngle;
+            this.yawOffset   = yawOffset;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("ShotParameters{exitSpeed=%.3f m/s, launchAngle=%.2f°, yawOffset=%.2f°}",
+                                 exitSpeed, launchAngle, yawOffset);
+        }
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /**
+     * Compute shooter exit speed, launch angle, and yaw correction from robot state.
+     *
+     * Applies the 1690 Orbit iterative virtual-target algorithm for shoot-on-the-move:
+     * each pass looks up the polynomial at the current virtual aim point, estimates
+     * time-of-flight from horizontal kinematics, shifts the aim point by how far the
+     * robot moves during that flight, and repeats until TOF converges (≤ 5 passes,
+     * typically 2–3).
+     *
+     * @param distance           horizontal distance to goal centre (metres)
+     * @param radialVelocity     robot velocity toward/away from goal (m/s);
+     *                           positive = closing on goal
+     * @param tangentialVelocity robot velocity perpendicular to the robot–goal line (m/s)
+     * @return {@link ShotParameters} containing exitSpeed, launchAngle, and yawOffset.
+     *         exitSpeed   — convert to flywheel RPM: RPM = (exitSpeed / wheelCircumference) * 60.
+     *         launchAngle — command directly to the hood/pivot mechanism.
+     *         yawOffset   — add to current heading before firing.
+     */
+    public static ShotParameters getShotParams(double distance, double radialVelocity,
+                                               double tangentialVelocity) {
+        // ── 1690 iterative virtual-target solver ──────────────────────────────
+        double vdx = distance;  // virtual aim point — radial component (m)
+        double vdz = 0.0;       // virtual aim point — lateral component (m)
+        double tof  = 0.0;      // converged time-of-flight estimate (s)
+
+        for (int iter = 0; iter < 5; iter++) {
+            double vDist = Math.sqrt(vdx * vdx + vdz * vdz);
+            if (vDist < 0.1) break;
+
+            // Evaluate polynomial at virtual distance with rv = 0.
+            // Robot motion is already encoded in the shifted aim point.
+            double[] raw   = evalPolyRaw(vDist, 0.0);
+            double   speed = raw[0] * MPS_FACTOR;
+            double   angle = raw[1] + HOOD_OFFSET_DEG;
+
+            // Approximate TOF from horizontal kinematics (~5 % error, sufficient for correction)
+            double cosA    = Math.cos(angle * Math.PI / 180.0);
+            double prevTof = tof;
+            tof = vDist / Math.max(speed * cosA, 0.5);  // 0.5 guards div-by-zero
+
+            // Shift virtual aim point: where the goal will be when the ball arrives
+            vdx = distance - radialVelocity    * tof;
+            vdz =          - tangentialVelocity * tof;
+
+            if (iter > 0 && Math.abs(tof - prevTof) < 0.002) break;
+        }
+
+        // ── Final shot parameters at converged virtual aim point ──────────────
+        double virtualDist  = Math.sqrt(vdx * vdx + vdz * vdz);
+
+        // Yaw: angle from radial axis to virtual aim point
+        double yawOffsetDeg = Math.atan2(-tangentialVelocity * tof,
+                                          distance - radialVelocity * tof)
+                              * (180.0 / Math.PI);
+
+        double[] raw = evalPolyRaw(virtualDist, 0.0);
+        return new ShotParameters(
+            raw[0] * MPS_FACTOR,
+            raw[1] + HOOD_OFFSET_DEG,
+            yawOffsetDeg
+        );
+    }
+
+    /** Convenience overload — use when robot is not moving laterally. */
+    public static ShotParameters getShotParams(double distance, double radialVelocity) {
+        return getShotParams(distance, radialVelocity, 0.0);
+    }
+
+    // ── Polynomial evaluation ─────────────────────────────────────────────────
+
+    /**
+     * Evaluates the raw (un-tuned) polynomial surface at (distance, radialVel).
+     * Inputs are clamped to the fitted data range.
+     *
+     * @return double[] { rawExitSpeed_ms, rawLaunchAngle_deg }
+     *         Multiply exitSpeed by MPS_FACTOR and add HOOD_OFFSET_DEG to angle
+     *         to obtain the final tuned values.
+     */
+    private static double[] evalPolyRaw(double distance, double radialVel) {
+        double d = Math.max(DIST_MIN, Math.min(DIST_MAX, distance));
+        double v = Math.max(RV_MIN,   Math.min(RV_MAX,   radialVel));
+
+${precompute}
+
+        double[] terms = {
+${termsInit}
+        };
+
+        double exitSpeed = 0.0, launchAngle = 0.0;
+        for (int i = 0; i < terms.length; i++) {
+            exitSpeed   += SPEED_COEFFS[i] * terms[i];
+            launchAngle += ANGLE_COEFFS[i] * terms[i];
+        }
+        return new double[]{ exitSpeed, launchAngle };
+    }
+}`;
+
+  showCodeModal(java, 'ShotCalculator.java');
+};
+
+// ── Code modal helpers ─────────────────────────────────────────────────────────
+let _modalCode     = '';
+let _modalFilename = '';
+
+function showCodeModal(code, filename) {
+  _modalCode     = code;
+  _modalFilename = filename;
+  $('java-modal-code').textContent     = code;
+  $('java-modal-filename').textContent = filename;
+  $('java-modal').classList.remove('hidden');
+}
+
+window.closeCodeModal = function () {
+  $('java-modal').classList.add('hidden');
+};
+
+window.onModalOverlayClick = function (e) {
+  if (e.target === $('java-modal')) closeCodeModal();
+};
+
+window.copyModalCode = function () {
+  navigator.clipboard.writeText(_modalCode).then(() => {
+    const btn = $('java-copy-btn');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  }).catch(() => window.prompt('Copy Java code:', _modalCode));
+};
+
+window.downloadModalCode = function () {
+  const blob = new Blob([_modalCode], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = _modalFilename;
+  a.click();
+};
+
+// Close modal on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeCodeModal();
+});
