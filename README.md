@@ -4,8 +4,6 @@ Physics-based shot planning for FRC 2026 (Rebuilt), inspired by frc4414's approa
 
 Fully client-side: the entire physics engine, valid-region sweep, 2D polynomial fit, and visualizations run in the browser. No server, no install.
 
-**[Live on GitHub Pages →](https://frc4414.github.io/RebuiltShotCalculator/)**
-
 ---
 
 ## Key Design Principles
