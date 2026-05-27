@@ -60,11 +60,11 @@ function bindSlider(numId, slId) {
 }
 [
   ['sim-dist','sim-dist-sl'],
-  ['sim-rv','sim-rv-sl'],     ['sim-spin','sim-spin-sl'],
+  ['sim-rv','sim-rv-sl'],     ['sim-lateral','sim-lateral-sl'], ['sim-spin','sim-spin-sl'],
   ['sim-ceiling','sim-ceiling-sl'],
   ['tbl-hood','tbl-hood-sl'], ['tbl-mps','tbl-mps-sl'],   ['tbl-spin','tbl-spin-sl'],
   ['tbl-ceiling','tbl-ceiling-sl'],
-  ['lkp-dist','lkp-dist-sl'], ['lkp-rv','lkp-rv-sl'],
+  ['lkp-dist','lkp-dist-sl'], ['lkp-rv','lkp-rv-sl'],     ['lkp-lateral','lkp-lateral-sl'],
 ].forEach(([n, s]) => bindSlider(n, s));
 
 // ── Chart-tab switching (Simulate tab) ────────────────────────────────────────
@@ -97,7 +97,8 @@ const SIM_SWEEP = {
 // Sweeps the valid region for the given distance / radial velocity, picks the
 // most error-tolerant shot, and draws its trajectory.
 window.runSimulate = function () {
-  const dist   = val('sim-dist');
+  const dist       = val('sim-dist');
+  const lateralVel = val('sim-lateral');
   const params = {
     distance:       dist,
     robotRadialVel: val('sim-rv'),
@@ -134,6 +135,25 @@ window.runSimulate = function () {
     Entry x: ${result.xFinal.toFixed(3)} m (goal ${(dist - goalR).toFixed(2)} – ${(dist + goalR).toFixed(2)} m)<br/>
     Time of flight: ${result.tof.toFixed(3)} s · valid shots in region: ${valid.length}
   `;
+
+  // Virtual-target section (shown whenever robot is moving)
+  if (params.robotRadialVel !== 0 || lateralVel !== 0) {
+    const vt = PHYSICS.computeVirtualTarget({
+      distance: dist, radialVel: params.robotRadialVel, lateralVel,
+      spinRps: params.spinRps, drag: params.drag, magnus: params.magnus,
+      ceilingHeight: params.ceilingHeight,
+    });
+    const yawDir = vt.yawOffsetDeg < -0.05 ? ' (aim right)' :
+                   vt.yawOffsetDeg >  0.05 ? ' (aim left)'  : '';
+    box.innerHTML += `
+      <hr style="border-color:rgba(120,130,200,0.25);margin:7px 0"/>
+      <span style="color:#7b8cde;font-size:11px;font-weight:700">&#9654; SHOOT-ON-MOVE (1690 virtual target)</span><br/>
+      Virtual target dist: <strong>${vt.virtualDist.toFixed(2)} m</strong>
+        <span style="color:#888;font-size:11px">(actual ${dist.toFixed(2)} m)</span><br/>
+      Yaw offset: <strong>${vt.yawOffsetDeg >= 0 ? '+' : ''}${vt.yawOffsetDeg.toFixed(1)}°</strong>${yawDir}
+    `;
+  }
+
   box.classList.remove('hidden');
 
   switchChartTab('trajectory');
@@ -543,14 +563,14 @@ window.generateTable = function () {
   const onDone = table => {
     bar.style.width = '100%'; label.textContent = '100% — Done';
     tableEntries = table;
-    solver = new SHOT_TABLE.ShotPolynomialSolver(4);
+    solver = new SHOT_TABLE.ShotPolynomialSolver(2);
     solver.fit(tableEntries);
     tableGenerated = true;
     activeWorker = null;
     $('tbl-generate-btn').disabled = false;
     const validCount = tableEntries.filter(e => e.validCount > 0).length;
     status.className = 'result-box info';
-    status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · Polynomials fitted (degree 4)`;
+    status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · Polynomials fitted (degree 2)`;
     status.classList.remove('hidden');
     drawTableCharts();
     drawPolyCurves('polyCurvesChart');
@@ -800,7 +820,7 @@ window.importTable = function () {
       try {
         const data = JSON.parse(ev.target.result);
         tableEntries = data.table || data;
-        solver = new SHOT_TABLE.ShotPolynomialSolver(4);
+        solver = new SHOT_TABLE.ShotPolynomialSolver(2);
         solver.fit(tableEntries);
         tableGenerated = true;
         drawTableCharts();
@@ -827,8 +847,9 @@ window.doLookup = function () {
     return;
   }
 
-  const dist = val('lkp-dist');
-  const rv   = val('lkp-rv');
+  const dist       = val('lkp-dist');
+  const rv         = val('lkp-rv');
+  const lateralVel = val('lkp-lateral');
   const result = solver.predict(dist, rv);
   if (!result) {
     box.innerHTML = '<span style="color:#e05667">No polynomial data at this distance.</span>';
@@ -841,6 +862,7 @@ window.doLookup = function () {
   box.innerHTML = `
     <span class="lbl">Distance:</span>        <span class="val">${dist.toFixed(2)} m</span><br/>
     <span class="lbl">Radial Velocity:</span>  <span class="val">${rv >= 0 ? '+' : ''}${rv.toFixed(2)} m/s</span><br/>
+    <span class="lbl">Lateral Velocity:</span> <span class="val">${lateralVel >= 0 ? '+' : ''}${lateralVel.toFixed(2)} m/s</span><br/>
     <br/>
     <span class="lbl">── Shot Command ───────────────</span><br/>
     <span class="lbl">Exit Speed:</span>       <span class="val">${result.exitSpeed.toFixed(3)} m/s</span><br/>
@@ -852,6 +874,32 @@ window.doLookup = function () {
     <span class="lbl">MPS factor:</span>       <span class="val">${mpsFactor.toFixed(3)}</span><br/>
     <span class="lbl">Spin rate:</span>        <span class="val">${val('tbl-spin').toFixed(0)} rps</span>
   `;
+
+  // Virtual-target correction (1690-style) — shown whenever robot is moving
+  if (rv !== 0 || lateralVel !== 0) {
+    const spinRps      = val('tbl-spin');
+    const drag         = $('tbl-drag').checked;
+    const magnus       = $('tbl-magnus').checked;
+    const ceilingHeight = $('tbl-ceiling-on').checked ? val('tbl-ceiling') : null;
+    const vt = PHYSICS.computeVirtualTarget({
+      distance: dist, radialVel: rv, lateralVel,
+      spinRps, drag, magnus, ceilingHeight,
+    });
+    const yawDir = vt.yawOffsetDeg < -0.05 ? ' (aim right)' :
+                   vt.yawOffsetDeg >  0.05 ? ' (aim left)'  : '';
+    // Re-query table at virtual distance for the corrected shot command
+    const vtResult = solver.predict(vt.virtualDist, 0);
+    const vtHtml = vtResult ? `
+      <span class="lbl">Virtual speed:</span>    <span class="val">${vtResult.exitSpeed.toFixed(3)} m/s</span><br/>
+      <span class="lbl">Virtual angle:</span>    <span class="val">${vtResult.launchAngle.toFixed(2)}°</span><br/>` : '';
+    box.innerHTML += `
+      <br/>
+      <span class="lbl" style="color:#7b8cde">── Shoot-on-Move (1690) ───────</span><br/>
+      <span class="lbl">Virtual dist:</span>     <span class="val">${vt.virtualDist.toFixed(2)} m</span><br/>
+      <span class="lbl">Yaw offset:</span>       <span class="val">${vt.yawOffsetDeg >= 0 ? '+' : ''}${vt.yawOffsetDeg.toFixed(1)}°${yawDir}</span><br/>
+      ${vtHtml}
+    `;
+  }
 
   drawPolyCurves('lookupPolyChart');
 };

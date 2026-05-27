@@ -245,6 +245,64 @@ const PHYSICS = (() => {
     return best;
   }
 
+  /**
+   * Iterative virtual-target solver — 1690 Orbit shoot-on-the-move technique.
+   *
+   * The robot moves at (radialVel, lateralVel) while the ball is in flight.
+   * Each iteration: find the optimal stationary shot to the current virtual
+   * target → get its TOF → shift virtual target = (dist−vr·t, −vl·t) → repeat.
+   * Converges in ≤5 steps as long as ball speed ≫ robot speed.
+   *
+   * Returns:
+   *   virtualDist   — effective distance to aim at (m); use for table lookup
+   *   yawOffsetDeg  — horizontal shooter correction (°); negative = aim right
+   *                   when moving left; use atan convention described above
+   *   tof           — converged time-of-flight estimate (s)
+   */
+  function computeVirtualTarget({
+    distance, radialVel = 0, lateralVel = 0,
+    spinRps = 50, drag = true, magnus = true,
+    ceilingHeight = null, maxIter = 5,
+  }) {
+    let tof = 0;
+    let vdx = distance;   // virtual target radial component
+    let vdz = 0;          // virtual target lateral component
+
+    for (let i = 0; i < maxIter; i++) {
+      const vDist = Math.sqrt(vdx * vdx + vdz * vdz);
+      if (vDist < 0.1) break;
+
+      // Query optimal stationary shot at virtual distance
+      const valid = findValidShots({
+        distance: vDist, robotRadialVel: 0,
+        spinRps, drag, magnus, ceilingHeight,
+        speedSteps: 40, angleSteps: 40,
+      });
+      const opt = selectOptimalShot(valid);
+      if (!opt) break;
+
+      const r = simulateShot({
+        distance: vDist, exitSpeed: opt.speed, launchAngleDeg: opt.angle,
+        spinRps, drag, magnus, ceilingHeight, storeTrajectory: false,
+      });
+
+      const prevTof = tof;
+      tof = r.tof;
+
+      // Where the goal appears relative to the robot when the ball arrives
+      vdx = distance - radialVel * tof;
+      vdz = -lateralVel * tof;
+
+      if (i > 0 && Math.abs(tof - prevTof) < 0.002) break;
+    }
+
+    const virtualDist = Math.sqrt(vdx * vdx + vdz * vdz);
+    // Negative yawOffsetDeg = aim right; positive = aim left
+    const yawOffsetDeg = Math.atan2(-lateralVel * tof, distance - radialVel * tof) * 180 / Math.PI;
+
+    return { virtualDist, yawOffsetDeg, tof };
+  }
+
   function std(arr) {
     if (arr.length < 2) return 0;
     const m = arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -253,6 +311,6 @@ const PHYSICS = (() => {
 
   return {
     GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, WALL_HEIGHT, WALL_TOP, SHOOTER_HEIGHT,
-    simulateShot, findValidShots, selectOptimalShot, std,
+    simulateShot, findValidShots, selectOptimalShot, computeVirtualTarget, std,
   };
 })();
