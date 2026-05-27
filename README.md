@@ -2,107 +2,173 @@
 
 Physics-based shot planning for FRC 2026 (Rebuilt), inspired by frc4414's approach and the [1690 Orbit shoot-on-the-move presentation](https://www.youtube.com/watch?v=N6ogT5DjGOk).
 
-Fully client-side: the entire physics engine, valid-region sweep, polynomial fit, and visualizations run in the browser. No server, no install.
+Fully client-side: the entire physics engine, valid-region sweep, 2D polynomial fit, and visualizations run in the browser. No server, no install.
+
+**[Live on GitHub Pages →](https://frc4414.github.io/RebuiltShotCalculator/)**
+
+---
 
 ## Key Design Principles
 
-Instead of empirically tuning a full distance/speed/angle lookup map, this system:
+Instead of empirically tuning a full lookup map, this system:
 
-1. **Simulates the full valid shot region** at each (distance, radial velocity) — not just the center of the goal, but every (speed, angle) pair that scores. This gives a direct measure of shot robustness.
-2. **Selects the optimal shot** as the one that maximizes the std-normalized margin between exit-velocity and launch-angle error — the shot deepest inside the valid region along its weaker axis. Ties break on centroid proximity so adjacent (distance, rv) cells produce smoothly-varying picks.
-3. **Fits degree-2 polynomials** across distance space per radial-velocity level for O(1) real-time lookup.
+1. **Simulates the full valid shot region** at every (distance, radial velocity) cell — not just the center of the goal, but every (speed, angle) pair that scores. This gives a direct measure of shot robustness.
+2. **Selects the optimal shot** as the one that maximizes the std-normalized margin from the valid-region boundary along both axes. Ties break on centroid proximity so adjacent cells produce smoothly-varying picks.
+3. **Fits a single 2D degree-3 polynomial surface** jointly across all (distance, radial velocity) data using least-squares normal equations solved by Gauss-Jordan with partial pivoting. One surface per output — no per-rv interpolation or table switching at runtime.
 4. **Reduces tuning to two scalar parameters** that correct the entire shot envelope at once.
-5. **Compensates for robot motion at runtime** using an iterative virtual-target solver (1690 Orbit technique): tangential velocity produces a yaw offset; radial velocity is baked into both the table and the virtual-target distance.
+5. **Compensates for robot motion at runtime** using an iterative virtual-target solver (1690 Orbit technique).
+
+---
 
 ## Physics Model
 
 - **Aerodynamic drag** (`C_d = 0.55` for a textured/seamed game piece): `F = ½ ρ C_d A v²`, applied opposite to velocity.
-- **Magnus effect**: `|F| = ½ ρ C_m A v ω R`, applied perpendicular to velocity in the lift direction for backspin. `C_m = 0.20` — tune against measured flight data if needed.
-- **Spin decay**: backspin decays exponentially in flight at `SPIN_DECAY_RATE = 0.5 s⁻¹` (ω(t) = ω₀·e^(−k·t)). Tune against real shots.
-- **Symplectic (semi-implicit) Euler** integration at `DT = 0.002 s`, `MAX_SIM_TIME = 3.0 s`. Velocity is updated before position, giving better energy conservation than forward Euler.
-- Goal geometry: front lip at 1.83 m, opening radius 0.530 m. The **front wall** extends from carpet to `WALL_TOP` — any trajectory crossing it below that height is a miss. The **back wall** sits between rim and `WALL_TOP`; crossing it is also a miss. Both walls are 8" tall.
-- Optional **ceiling**: any shot whose arc crosses the chosen height is rejected (useful for arena trusses or scoreboard clearance).
+- **Magnus effect**: `|F| = ½ ρ C_m A v ω R`, applied perpendicular to velocity in the lift direction for backspin. `C_m = 0.20` — tune against measured flight data.
+- **Spin decay**: backspin decays exponentially in flight: `ω(t) = ω₀ · e^(−k·t)`, `k = 0.5 s⁻¹`. Tune against real shots.
+- **Symplectic (semi-implicit) Euler** integration at `DT = 0.002 s`, `MAX_SIM_TIME = 3.0 s`. Velocity updated before position for better energy conservation.
+- **Goal geometry**: front lip at 1.83 m, opening radius 0.530 m. Front wall (carpet → `WALL_TOP`) and back wall (rim → `WALL_TOP`) are each 8" tall; crossing either is a miss.
+- **Ceiling limit**: any arc that crosses the configured height is rejected (arena truss / scoreboard clearance). Forced on when generating from the Overview tab.
+
+---
+
+## 2D Polynomial Surface
+
+The polynomial surface maps `(distance, radialVelocity) → exitSpeed` and `(distance, radialVelocity) → launchAngle` using a single degree-3 fit across all table data simultaneously.
+
+**Basis** — all monomials `d^a · v^b` with `a + b ≤ 3` (10 terms):
+
+```
+1,  d,  v,  d²,  d·v,  v²,  d³,  d²·v,  d·v²,  v³
+```
+
+**Fit** — least-squares normal equations `(AᵀA) c = Aᵀy`, solved by Gauss-Jordan with partial pivoting. One solve per output (speed, angle).
+
+**Runtime** — `O(1)` evaluation: `f(d,v) = Σ cᵢ · d^aᵢ · v^bᵢ`. Inputs are clamped to the fitted data range.
+
+---
 
 ## Shoot-on-the-Move (1690 Orbit Virtual-Target Solver)
 
-When the robot is moving during a shot, the ball carries the robot's velocity. The calculator models this in two parts:
+When the robot moves during a shot, the ball carries the robot's velocity. The calculator handles this in two parts:
 
-**Radial velocity** (toward/away from goal) is a table parameter — the sweep and polynomial fit are generated across `rv ∈ [−3, 3]` m/s, so the shot command already accounts for the robot closing or opening the range.
+**Radial velocity** (toward/away from goal) is a table input — the polynomial surface is fitted over `rv ∈ [−3, 3]` m/s, so the shot command already accounts for the robot closing or opening the range.
 
-**Lateral velocity** (perpendicular to the shot direction) cannot be pre-tabulated; it is compensated at runtime. The calculator uses the iterative virtual-target algorithm:
+**Tangential velocity** (perpendicular to the shot line) is compensated at runtime using the iterative virtual-target algorithm:
 
-1. Aim at the actual goal distance; simulate the optimal shot; record time-of-flight `t`.
-2. Shift the virtual target: `(dist − v_r · t, −v_l · t)` in the floor plane.
-3. Re-simulate to the virtual distance; update `t`. Repeat up to 5 times (converges in ≤3).
-4. The converged **virtual distance** is what you query the shot table with.
-5. The **yaw offset** = `atan2(−v_l · t, dist − v_r · t)` — how far to rotate the shooter to cancel lateral drift.
+1. Start with the virtual aim point at the actual goal distance.
+2. Evaluate the polynomial at that virtual distance (with `rv = 0`); estimate time-of-flight `t` from horizontal kinematics: `t ≈ vDist / (speed · cos(angle))`.
+3. Shift the virtual aim point: `vdx = dist − v_r · t`, `vdz = −v_t · t`.
+4. Repeat up to 5 iterations; converges in ≤ 3 once `|Δt| < 2 ms`.
+5. **Virtual distance** `= √(vdx² + vdz²)` — query the polynomial here for the final shot command.
+6. **Yaw offset** `= atan2(−v_t · t, dist − v_r · t)` — how far to rotate the shooter to cancel lateral drift.
 
-The Simulate and Live Lookup tabs display the virtual distance and yaw offset whenever either velocity is non-zero.
+---
 
-## Usage
+## Java Code Generation
 
-The UI has three tabs:
+After generating a table, click **☕ Generate Java** to produce a ready-to-deploy `ShotCalculator.java` with all polynomial coefficients baked in. The generated file contains:
 
-- **Shot Simulation** — enter distance, robot radial velocity, robot lateral velocity, spin rate, and optional ceiling. Click **Simulate Shot** and the app sweeps the speed × angle envelope, picks the most error-tolerant shot, and draws its trajectory. When either robot velocity is non-zero, a **Shoot-on-Move** section shows the virtual target distance and required yaw offset. **Valid Region** shows the full fan of scoring trajectories and the filled valid envelope with tolerance crosshairs.
-- **Shot Table** — generates the full distance × radial-velocity table by running the valid-region sweep at every cell, then fits a degree-2 polynomial per rv level. Heatmaps show speed, angle, and tolerance. Export/import as JSON.
-- **Live Lookup** — query the fitted polynomial at any (distance, radial velocity, lateral velocity) for instant speed/angle/yaw output.
+- `ShotParameters` — immutable result object with three fields:
+  - `exitSpeed` (m/s, pre-scaled by `MPS_FACTOR`) — convert to flywheel RPM with your wheel radius.
+  - `launchAngle` (degrees, `HOOD_OFFSET_DEG` applied) — command directly to the hood/pivot.
+  - `yawOffset` (degrees) — add to current heading before firing; `0` when not moving tangentially.
+- `getShotParams(distance, radialVelocity, tangentialVelocity)` — runs the full virtual-target iteration and returns a `ShotParameters`.
+- `getShotParams(distance, radialVelocity)` — convenience overload with `tangentialVelocity = 0`.
+- `evalPolyRaw(distance, radialVel)` — private helper used by the solver loop and for the final answer.
 
-All charts support **scroll to zoom**, **drag to pan**, and **double-click to reset**.
+**Example usage:**
 
-## Valid Region Chart
+```java
+ShotParameters shot = ShotCalculator.getShotParams(distance, radialVel, tangentialVel);
+flywheel.setRPM(shot.exitSpeed / wheelCircumference * 60);
+hood.setAngle(shot.launchAngle);
+drivetrain.addYawOffset(shot.yawOffset);
+```
 
-The Valid Region chart shows the scoring envelope in (launch angle, launch speed) space:
+---
 
-- **Green curve (far rim)** — upper speed boundary at each angle: the fastest shot that still lands inside the far side of the goal.
-- **Red curve (close rim)** — lower speed boundary: the slowest shot that clears the near rim.
-- **Shaded region** — all valid (angle, speed) combinations.
-- **Orange vertical bar** — speed tolerance at the optimal angle: spans exactly from close rim to far rim.
-- **Purple horizontal bar** — angle tolerance at the optimal speed: spans exactly the contiguous angle range where the optimal speed falls inside the valid band.
-- **Blue star** — the optimal shot (deepest inside the valid region along its weaker axis).
+## UI Overview
+
+The app opens on the **Overview** tab, which is the primary workflow page.
+
+### Overview (default)
+The main workflow page. Left sidebar for configuration; right column is the interactive 3D polynomial surface.
+
+| Sidebar section | What it does |
+|---|---|
+| Table Generation | Distance range, step counts, spin rate |
+| Ceiling | Ceiling height slider — always enabled when generating from this tab |
+| Export | Export/import JSON table or polynomial JSON; copy to clipboard; generate Java |
+| ▶ Generate Shot Table | Runs the full sweep and polynomial fit; progress bar updates live |
+
+The 3D surface auto-updates after generation. Toggle between **Exit Speed** and **Launch Angle** views; optionally overlay raw table data points.
+
+### Shot Simulation
+Single-shot analysis. Sweeps the valid region, picks the optimal shot, draws:
+- **Trajectory** view — single ball path or full shot fan (all valid trajectories colored near-to-far rim).
+- **Valid Region** view — filled valid envelope in (angle, speed) space with tolerance crosshairs at the optimal shot and shoot-on-move correction when robot is moving.
+
+### Shot Table
+Generate and inspect the full table. Charts: Speed Map, Angle Map, Tolerance, Poly Curves (rv slices at −2 / 0 / +2 m/s), and Coefficients (full 2D basis term table). Export/import and Java generation also available here.
+
+### Live Lookup
+Query the fitted polynomial at any (distance, radial velocity, lateral velocity) for instant speed/angle/RPM output, including shoot-on-move virtual-target and yaw correction.
+
+### Poly Surface
+Standalone full-screen 3D surface viewer with orbit/zoom controls.
+
+**All Chart.js charts**: scroll to zoom · drag to pan · double-click to reset.  
+**3D surface**: drag to orbit · scroll to zoom · double-click to reset.
+
+---
 
 ## Tuning (Two Parameters)
 
 | Parameter | How to tune | Effect |
 |---|---|---|
-| `hood_angle_offset` | Measure real exit angle from slow-mo video, apply constant offset | Shifts all shot angles by a fixed amount |
-| `mps_factor` | Adjust until balls go in at any distance | Scales the entire speed command; one knob fixes all distances |
+| `hood_angle_offset` (°) | Measure real exit angle from slow-mo video; apply constant offset | Shifts every shot angle by a fixed amount |
+| `mps_factor` | Adjust until shots go in at any distance | Scales the entire speed command; one knob re-aligns all distances |
 
-As balls wear in, a small `mps_factor` adjustment re-aligns the full shot range.
+Both values are baked into the generated Java at export time.
+
+---
 
 ## Running Locally
 
 ```bash
 cd docs
 python -m http.server 8000      # any static file server works
-# then open http://localhost:8000
+# open http://localhost:8000
 ```
 
-A static server is preferred because the shot-table generator uses a Web Worker, which Chrome blocks on `file://` origins. The app falls back to running on the main thread if the worker fails, so opening `index.html` directly still works — just slower and on-thread.
+A static server is required for the Web Worker (Chrome blocks workers on `file://` origins). The app falls back to running on the main thread if the worker is unavailable — slower on large tables but fully functional.
+
+---
 
 ## File Layout
 
 ```
 docs/
-  index.html       # UI: Simulate / Shot Table / Live Lookup tabs
-  main.js          # UI glue, chart rendering, inline-table fallback
-  physics.js       # Ball flight simulation (drag + Magnus + spin decay + collision)
-  shot_table.js    # Polynomial solver (least-squares Vandermonde fit)
-  worker.js        # Off-thread shot-table generator
-  style.css
+  index.html      # 5-tab UI: Overview / Shot Simulation / Shot Table / Live Lookup / Poly Surface
+  main.js         # UI logic, chart rendering, Plotly 3D surface, Java code generation
+  physics.js      # Ball flight simulation (drag + Magnus + spin decay + wall/ceiling collision)
+  shot_table.js   # 2D polynomial solver (least-squares Gauss-Jordan fit + ShotPolynomialSolver)
+  worker.js       # Off-thread shot-table generator
+  style.css       # Dark blue/purple theme (CSS custom properties)
 ```
 
-## Constants to Update
+---
 
-Before deploying, edit the constants at the top of `docs/physics.js`:
+## Constants to Update (`physics.js`)
 
 | Constant | Default | Notes |
 |---|---|---|
-| `GOAL_HEIGHT` | 2.36 m | Goal opening center height |
+| `GOAL_HEIGHT` | 2.36 m | Goal opening centre height |
 | `GOAL_RADIUS` | 0.530 m | Goal opening radius |
 | `WALL_HEIGHT` | 0.2032 m | Rim wall height above each edge (8 in) |
 | `BALL_RADIUS` | 0.120 m | Game-piece radius |
 | `BALL_MASS` | 0.235 kg | Game-piece mass |
-| `SHOOTER_HEIGHT` | 0.546 m | Your shooter exit height above floor |
-| `DRAG_COEFF` | 0.55 | 0.47 for smooth sphere; higher for seamed/textured pieces |
+| `SHOOTER_HEIGHT` | 0.546 m | Shooter exit height above floor |
+| `DRAG_COEFF` | 0.55 | 0.47 for smooth sphere; increase for seamed/textured pieces |
 | `MAGNUS_COEFF` | 0.20 | Tune against measured flight data |
 | `SPIN_DECAY_RATE` | 0.5 s⁻¹ | Exponential spin decay rate; tune against real shots |
