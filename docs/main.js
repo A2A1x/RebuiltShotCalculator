@@ -495,8 +495,10 @@ function shotTolerance(valid, optimal) {
   const aStep = angles.length > 1 ? (angles[angles.length-1] - angles[0]) / (angles.length-1) : 1;
   const sStep = speeds.length > 1 ? (speeds[speeds.length-1] - speeds[0]) / (speeds.length-1) : 0.5;
 
-  const atAngle = valid.filter(s => Math.abs(s.angle - optimal.angle) <= aStep * 1.5);
-  const atSpeed = valid.filter(s => Math.abs(s.speed - optimal.speed) <= sStep * 1.5);
+  // Use half-step threshold to select only the single grid row/column at the
+  // optimal value — wider bands bleed into adjacent rows with different extents.
+  const atAngle = valid.filter(s => Math.abs(s.angle - optimal.angle) <= aStep * 0.5);
+  const atSpeed = valid.filter(s => Math.abs(s.speed - optimal.speed) <= sStep * 0.5);
 
   return {
     speedMin: atAngle.length ? Math.min(...atAngle.map(s => s.speed)) : optimal.speed,
