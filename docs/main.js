@@ -1304,9 +1304,12 @@ window.generateJava = function () {
 
 public class ShotCalculator {
 
-    // ── Tuning (baked in at generation time) ─────────────────────────────────
-    private static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};   // degrees, added to angle
-    private static final double MPS_FACTOR      = ${mps.toFixed(6)};   // scales exit speed
+    // ── Tuning used at generation time (informational only) ──────────────────
+    // MPS_FACTOR and HOOD_OFFSET_DEG were applied to the training data before
+    // the polynomial was fitted, so they are already encoded in the coefficients.
+    // Do NOT apply them again to the polynomial output.
+    public static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};  // deg, baked in
+    public static final double MPS_FACTOR      = ${mps.toFixed(6)};  // baked in
 
     // ── Fitted range — inputs are clamped to these bounds ────────────────────
     private static final double DIST_MIN = ${distMin.toFixed(4)};  // metres
@@ -1369,8 +1372,10 @@ ${fmtCoeffLine(c.angleCoeffs)}
      *                           positive = closing on goal
      * @param tangentialVelocity robot velocity perpendicular to the robot–goal line (m/s)
      * @return {@link ShotParameters} containing exitSpeed, launchAngle, and yawOffset.
-     *         exitSpeed   — convert to flywheel RPM: RPM = (exitSpeed / wheelCircumference) * 60.
-     *         launchAngle — command directly to the hood/pivot mechanism.
+     *         exitSpeed   — m/s with MPS_FACTOR already applied; convert to RPM:
+     *                       RPM = (exitSpeed / wheelCircumference) * 60.
+     *         launchAngle — degrees with HOOD_OFFSET_DEG already applied; command
+     *                       directly to the hood/pivot mechanism.
      *         yawOffset   — add to current heading before firing.
      */
     public static ShotParameters getShotParams(double distance, double radialVelocity,
@@ -1386,9 +1391,10 @@ ${fmtCoeffLine(c.angleCoeffs)}
 
             // Evaluate polynomial at virtual distance with rv = 0.
             // Robot motion is already encoded in the shifted aim point.
+            // Polynomial output already includes MPS_FACTOR and HOOD_OFFSET_DEG.
             double[] raw   = evalPolyRaw(vDist, 0.0);
-            double   speed = raw[0] * MPS_FACTOR;
-            double   angle = raw[1] + HOOD_OFFSET_DEG;
+            double   speed = raw[0];
+            double   angle = raw[1];
 
             // Approximate TOF from horizontal kinematics (~5 % error, sufficient for correction)
             double cosA    = Math.cos(angle * Math.PI / 180.0);
@@ -1412,8 +1418,8 @@ ${fmtCoeffLine(c.angleCoeffs)}
 
         double[] raw = evalPolyRaw(virtualDist, 0.0);
         return new ShotParameters(
-            raw[0] * MPS_FACTOR,
-            raw[1] + HOOD_OFFSET_DEG,
+            raw[0],  // exitSpeed — MPS_FACTOR already encoded in polynomial
+            raw[1],  // launchAngle — HOOD_OFFSET_DEG already encoded in polynomial
             yawOffsetDeg
         );
     }
@@ -1426,12 +1432,11 @@ ${fmtCoeffLine(c.angleCoeffs)}
     // ── Polynomial evaluation ─────────────────────────────────────────────────
 
     /**
-     * Evaluates the raw (un-tuned) polynomial surface at (distance, radialVel).
+     * Evaluates the polynomial surface at (distance, radialVel).
      * Inputs are clamped to the fitted data range.
+     * Output values already include MPS_FACTOR and HOOD_OFFSET_DEG — do not apply them again.
      *
-     * @return double[] { rawExitSpeed_ms, rawLaunchAngle_deg }
-     *         Multiply exitSpeed by MPS_FACTOR and add HOOD_OFFSET_DEG to angle
-     *         to obtain the final tuned values.
+     * @return double[] { exitSpeed_ms, launchAngle_deg }
      */
     private static double[] evalPolyRaw(double distance, double radialVel) {
         double d = Math.max(DIST_MIN, Math.min(DIST_MAX, distance));
