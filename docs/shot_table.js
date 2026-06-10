@@ -41,11 +41,22 @@ const SHOT_TABLE = (() => {
     const m = terms.length;
     const n = ds.length;
 
+    // Normalise inputs to zero-mean unit-variance before building the normal
+    // equations. Without this, d^3 reaches ~512 at 8 m while the constant
+    // term is 1 — a 512× scale spread that makes AtA ill-conditioned and
+    // causes Gauss-Jordan to lose several digits of precision.
+    const dMean = ds.reduce((a, b) => a + b, 0) / n;
+    const vMean = vs.reduce((a, b) => a + b, 0) / n;
+    const dStd  = Math.sqrt(ds.reduce((s, d) => s + (d - dMean) ** 2, 0) / n) || 1;
+    const vStd  = Math.sqrt(vs.reduce((s, v) => s + (v - vMean) ** 2, 0) / n) || 1;
+    const dns = ds.map(d => (d - dMean) / dStd);
+    const vns = vs.map(v => (v - vMean) / vStd);
+
     const AtA = Array.from({ length: m }, () => new Float64Array(m));
     const Aty = new Float64Array(m);
 
     for (let i = 0; i < n; i++) {
-      const row = evalBasis(terms, ds[i], vs[i]);
+      const row = evalBasis(terms, dns[i], vns[i]);
       for (let r = 0; r < m; r++) {
         Aty[r] += row[r] * ys[i];
         for (let c = 0; c < m; c++) AtA[r][c] += row[r] * row[c];
@@ -73,14 +84,16 @@ const SHOT_TABLE = (() => {
     for (let i = 0; i < m; i++) {
       coeffs[i] = aug[i][m] / aug[i][i];
     }
-    return { coeffs, terms };
+    return { coeffs, terms, dMean, dStd, vMean, vStd };
   }
 
   /** Evaluate a fitted 2D polynomial at (d, v). */
   function polyval2D(poly, d, v) {
+    const dn = (d - poly.dMean) / poly.dStd;
+    const vn = (v - poly.vMean) / poly.vStd;
     let result = 0;
     for (let i = 0; i < poly.coeffs.length; i++) {
-      result += poly.coeffs[i] * Math.pow(d, poly.terms[i][0]) * Math.pow(v, poly.terms[i][1]);
+      result += poly.coeffs[i] * Math.pow(dn, poly.terms[i][0]) * Math.pow(vn, poly.terms[i][1]);
     }
     return result;
   }
@@ -192,13 +205,18 @@ const SHOT_TABLE = (() => {
      */
     getCoefficients() {
       if (!this._speedPoly) {
-        return { degree: this.degree, terms: [], speedCoeffs: [], angleCoeffs: [] };
+        return { degree: this.degree, terms: [], speedCoeffs: [], angleCoeffs: [],
+                 dMean: 0, dStd: 1, vMean: 0, vStd: 1 };
       }
       return {
         degree:      this.degree,
         terms:       this._speedPoly.terms,
         speedCoeffs: Array.from(this._speedPoly.coeffs),
         angleCoeffs: Array.from(this._anglePoly.coeffs),
+        dMean:       this._speedPoly.dMean,
+        dStd:        this._speedPoly.dStd,
+        vMean:       this._speedPoly.vMean,
+        vStd:        this._speedPoly.vStd,
       };
     }
 

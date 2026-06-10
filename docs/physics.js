@@ -276,6 +276,7 @@ const PHYSICS = (() => {
       const valid = findValidShots({
         distance: vDist, robotRadialVel: 0,
         spinRps, drag, magnus, ceilingHeight,
+        speedRange: [5.0, 20.0], angleRange: [10.0, 85.0],
         speedSteps: 40, angleSteps: 40,
       });
       const opt = selectOptimalShot(valid);

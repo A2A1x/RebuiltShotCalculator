@@ -690,6 +690,7 @@ function runTableInline(cfg, onProgress, onDone, onError) {
             distance: dist, robotRadialVel: rv, spinRps: cfg.spinRps,
             drag: cfg.drag, magnus: cfg.magnus,
             ceilingHeight: cfg.ceilingHeight,
+            speedRange: [5.0, 20.0], angleRange: [10.0, 85.0],
             speedSteps: 45, angleSteps: 45,
           });
           const optimal = PHYSICS.selectOptimalShot(valid);
@@ -1317,9 +1318,18 @@ public class ShotCalculator {
     private static final double RV_MIN   = ${rvMin.toFixed(4)};  // m/s
     private static final double RV_MAX   = ${rvMax.toFixed(4)};
 
+    // ── Input normalisation (applied before polynomial evaluation) ────────────
+    // Inputs are mapped to zero-mean unit-variance before the polynomial is
+    // evaluated. Coefficients are in normalised space and must NOT be used
+    // with raw (metres / m/s) inputs directly.
+    private static final double D_MEAN = ${c.dMean.toFixed(10)};
+    private static final double D_STD  = ${c.dStd.toFixed(10)};
+    private static final double V_MEAN = ${c.vMean.toFixed(10)};
+    private static final double V_STD  = ${c.vStd.toFixed(10)};
+
     // ── Polynomial coefficients ───────────────────────────────────────────────
-    // Both arrays share the same monomial basis.
-    // f(d, v) = Σ COEFFS[i] · d^a[i] · v^b[i]
+    // Both arrays share the same monomial basis (in normalised input space).
+    // f(d_norm, v_norm) = Σ COEFFS[i] · d_norm^a[i] · v_norm^b[i]
     private static final double[] SPEED_COEFFS = {
 ${fmtCoeffLine(c.speedCoeffs)}
     };
@@ -1439,8 +1449,10 @@ ${fmtCoeffLine(c.angleCoeffs)}
      * @return double[] { exitSpeed_ms, launchAngle_deg }
      */
     private static double[] evalPolyRaw(double distance, double radialVel) {
-        double d = Math.max(DIST_MIN, Math.min(DIST_MAX, distance));
-        double v = Math.max(RV_MIN,   Math.min(RV_MAX,   radialVel));
+        double d_raw = Math.max(DIST_MIN, Math.min(DIST_MAX, distance));
+        double v_raw = Math.max(RV_MIN,   Math.min(RV_MAX,   radialVel));
+        double d = (d_raw - D_MEAN) / D_STD;
+        double v = (v_raw - V_MEAN) / V_STD;
 
 ${precompute}
 

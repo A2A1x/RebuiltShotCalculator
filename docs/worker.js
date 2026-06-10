@@ -35,6 +35,7 @@ self.onmessage = function (e) {
           distance: dist, robotRadialVel: rv, spinRps,
           drag, magnus,
           ceilingHeight,
+          speedRange: [5.0, 20.0], angleRange: [10.0, 85.0],
           speedSteps: 45, angleSteps: 45,
         });
         const optimal = PHYSICS.selectOptimalShot(valid);
