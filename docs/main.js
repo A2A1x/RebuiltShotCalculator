@@ -78,7 +78,7 @@ function bindSlider(numId, slId) {
   ['sim-dist','sim-dist-sl'],
   ['sim-rv','sim-rv-sl'],     ['sim-lateral','sim-lateral-sl'], ['sim-spin','sim-spin-sl'],
   ['sim-ceiling','sim-ceiling-sl'],
-  ['tbl-hood','tbl-hood-sl'], ['tbl-mps','tbl-mps-sl'],   ['tbl-spin','tbl-spin-sl'],
+  ['tbl-spin','tbl-spin-sl'],
   ['tbl-ceiling','tbl-ceiling-sl'],
   ['lkp-dist','lkp-dist-sl'], ['lkp-rv','lkp-rv-sl'],     ['lkp-lateral','lkp-lateral-sl'],
   ['ov-spin','ov-spin-sl'], ['ov-ceiling','ov-ceiling-sl'],
@@ -574,8 +574,8 @@ window.generateTable = function () {
   const cfg = {
     distMin: val('tbl-dmin'),   distMax: val('tbl-dmax'),
     distSteps: intVal('tbl-dsteps'), rvSteps: intVal('tbl-rvsteps'),
-    hoodAngleOffset: val('tbl-hood'),
-    mpsFactor: val('tbl-mps'),
+    hoodAngleOffset: 0,
+    mpsFactor: 1,
     spinRps: val('tbl-spin'),
     drag:   $('tbl-drag').checked,
     magnus: $('tbl-magnus').checked,
@@ -994,8 +994,7 @@ window.doLookup = function () {
     return;
   }
 
-  const mpsFactor = val('tbl-mps');
-  const rpm = solver.speedToRpm(result.exitSpeed, mpsFactor);
+  const rpm = solver.speedToRpm(result.exitSpeed, 1);
 
   box.innerHTML = `
     <span class="lbl">Distance:</span>        <span class="val">${dist.toFixed(2)} m</span><br/>
@@ -1008,8 +1007,6 @@ window.doLookup = function () {
     <span class="lbl">Flywheel RPM:</span>     <span class="val">${Math.round(rpm)} RPM</span><br/>
     <br/>
     <span class="lbl">── Active Tuning ──────────────</span><br/>
-    <span class="lbl">Hood offset:</span>      <span class="val">${val('tbl-hood') >= 0 ? '+' : ''}${val('tbl-hood').toFixed(1)}°</span><br/>
-    <span class="lbl">MPS factor:</span>       <span class="val">${mpsFactor.toFixed(3)}</span><br/>
     <span class="lbl">Spin rate:</span>        <span class="val">${val('tbl-spin').toFixed(0)} rps</span>
   `;
 
@@ -1264,8 +1261,8 @@ window.generateJava = function () {
   const distMax = Math.max(...valid.map(e => e.distance));
   const rvMin   = Math.min(...valid.map(e => e.radialVelocity));
   const rvMax   = Math.max(...valid.map(e => e.radialVelocity));
-  const hood    = val('tbl-hood');
-  const mps     = val('tbl-mps');
+  const hood    = 0;
+  const mps     = 1;
   const now     = new Date().toISOString().slice(0, 10);
 
   // Coefficient arrays: one line per term with label comment
@@ -1305,12 +1302,16 @@ window.generateJava = function () {
 
 public class ShotCalculator {
 
-    // ── Tuning used at generation time (informational only) ──────────────────
-    // MPS_FACTOR and HOOD_OFFSET_DEG were applied to the training data before
-    // the polynomial was fitted, so they are already encoded in the coefficients.
-    // Do NOT apply them again to the polynomial output.
-    public static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};  // deg, baked in
-    public static final double MPS_FACTOR      = ${mps.toFixed(6)};  // baked in
+    // ── Robot-side tuning constants — edit these on the robot, not on the website ─
+    // The polynomial encodes raw physics (MPS_FACTOR = 1, HOOD_OFFSET_DEG = 0 at
+    // generation time). Apply corrections here so you can re-tune without
+    // regenerating the polynomial.
+    //   HOOD_OFFSET_DEG — constant angle added to every shot; measure from
+    //                     slow-motion video; positive = steeper.
+    //   MPS_FACTOR      — scales every exit-speed command; nudge until shots
+    //                     go in across all distances; 1.0 = no scaling.
+    public static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};
+    public static final double MPS_FACTOR      = ${mps.toFixed(6)};
 
     // ── Fitted range — inputs are clamped to these bounds ────────────────────
     private static final double DIST_MIN = ${distMin.toFixed(4)};  // metres
@@ -1342,9 +1343,9 @@ ${fmtCoeffLine(c.angleCoeffs)}
 
     /** Immutable shot command returned by {@link #getShotParams}. */
     public static final class ShotParameters {
-        /** Ball exit speed in m/s, pre-scaled by MPS_FACTOR. */
+        /** Ball exit speed in m/s, scaled by MPS_FACTOR. Multiply by your RPM_PER_MPS constant to get flywheel RPM. */
         public final double exitSpeed;
-        /** Shooter launch angle in degrees, with HOOD_OFFSET_DEG applied. */
+        /** Shooter launch angle in degrees, with HOOD_OFFSET_DEG added. Command directly to the hood/pivot. */
         public final double launchAngle;
         /**
          * Yaw correction to apply before firing (degrees).
@@ -1382,10 +1383,10 @@ ${fmtCoeffLine(c.angleCoeffs)}
      *                           positive = closing on goal
      * @param tangentialVelocity robot velocity perpendicular to the robot–goal line (m/s)
      * @return {@link ShotParameters} containing exitSpeed, launchAngle, and yawOffset.
-     *         exitSpeed   — m/s with MPS_FACTOR already applied; convert to RPM:
-     *                       RPM = (exitSpeed / wheelCircumference) * 60.
-     *         launchAngle — degrees with HOOD_OFFSET_DEG already applied; command
-     *                       directly to the hood/pivot mechanism.
+     *         exitSpeed   — m/s scaled by MPS_FACTOR; convert to RPM with your
+     *                       wheel geometry: RPM = exitSpeed * RPM_PER_MPS.
+     *         launchAngle — degrees with HOOD_OFFSET_DEG added; command directly
+     *                       to the hood/pivot mechanism.
      *         yawOffset   — add to current heading before firing.
      */
     public static ShotParameters getShotParams(double distance, double radialVelocity,
@@ -1401,10 +1402,9 @@ ${fmtCoeffLine(c.angleCoeffs)}
 
             // Evaluate polynomial at virtual distance with rv = 0.
             // Robot motion is already encoded in the shifted aim point.
-            // Polynomial output already includes MPS_FACTOR and HOOD_OFFSET_DEG.
             double[] raw   = evalPolyRaw(vDist, 0.0);
-            double   speed = raw[0];
-            double   angle = raw[1];
+            double   speed = raw[0] * MPS_FACTOR;
+            double   angle = raw[1] + HOOD_OFFSET_DEG;
 
             // Approximate TOF from horizontal kinematics (~5 % error, sufficient for correction)
             double cosA    = Math.cos(angle * Math.PI / 180.0);
@@ -1428,8 +1428,8 @@ ${fmtCoeffLine(c.angleCoeffs)}
 
         double[] raw = evalPolyRaw(virtualDist, 0.0);
         return new ShotParameters(
-            raw[0],  // exitSpeed — MPS_FACTOR already encoded in polynomial
-            raw[1],  // launchAngle — HOOD_OFFSET_DEG already encoded in polynomial
+            raw[0] * MPS_FACTOR,              // exitSpeed, scaled
+            raw[1] + HOOD_OFFSET_DEG,         // launchAngle, offset applied
             yawOffsetDeg
         );
     }
@@ -1442,9 +1442,10 @@ ${fmtCoeffLine(c.angleCoeffs)}
     // ── Polynomial evaluation ─────────────────────────────────────────────────
 
     /**
-     * Evaluates the polynomial surface at (distance, radialVel).
+     * Evaluates the raw polynomial surface at (distance, radialVel).
      * Inputs are clamped to the fitted data range.
-     * Output values already include MPS_FACTOR and HOOD_OFFSET_DEG — do not apply them again.
+     * Returns raw physics values — MPS_FACTOR and HOOD_OFFSET_DEG are applied
+     * by the caller ({@link #getShotParams}) after this returns.
      *
      * @return double[] { exitSpeed_ms, launchAngle_deg }
      */
