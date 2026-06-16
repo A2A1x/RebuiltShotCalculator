@@ -6,6 +6,11 @@ let solver = null;
 let tableGenerated = false;
 let activeWorker = null;
 
+let feedTableEntries = [];
+let feedSolver = null;
+let feedTableGenerated = false;
+let activeFeedWorker = null;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const val = id => parseFloat($(id).value);
@@ -64,6 +69,24 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         else drawOverviewSurface();
       }
     }
+    if (btn.dataset.tab === 'feedsurface') {
+      if (feedTableGenerated) drawFeedPolyCurves('feedSurfaceChart');
+    }
+  });
+});
+
+// ── Mode switching (Hub Shot / Feed Shot) ────────────────────────────────────
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.classList.contains('active')) return;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const mode = btn.dataset.mode;
+    $('hub-tab-bar').classList.toggle('hidden', mode !== 'hub');
+    $('feed-tab-bar').classList.toggle('hidden', mode !== 'feed');
+    const targetBar = $(mode === 'hub' ? 'hub-tab-bar' : 'feed-tab-bar');
+    const activeBtn = targetBar.querySelector('.tab-btn.active') || targetBar.querySelector('.tab-btn');
+    if (activeBtn) activeBtn.click();
   });
 });
 
@@ -82,6 +105,10 @@ function bindSlider(numId, slId) {
   ['tbl-ceiling','tbl-ceiling-sl'],
   ['lkp-dist','lkp-dist-sl'], ['lkp-rv','lkp-rv-sl'],     ['lkp-lateral','lkp-lateral-sl'],
   ['ov-spin','ov-spin-sl'], ['ov-ceiling','ov-ceiling-sl'],
+  ['feed-spin','feed-spin-sl'],
+  ['fsim-dist','fsim-dist-sl'], ['fsim-rv','fsim-rv-sl'],
+  ['fsim-spin','fsim-spin-sl'],
+  ['flkp-dist','flkp-dist-sl'], ['flkp-rv','flkp-rv-sl'], ['flkp-lateral','flkp-lateral-sl'],
 ].forEach(([n, s]) => bindSlider(n, s));
 
 // ── Chart-tab switching (Simulate tab) ────────────────────────────────────────
@@ -100,12 +127,20 @@ function switchTableTab(name) {
     c.classList.toggle('active', c.id === 'ttab-' + name));
 }
 
+// ── Chart-tab switching (Feed Table tab) ──────────────────────────────────────
+function switchFeedTab(name) {
+  document.querySelectorAll('#tab-feed .chart-tab-btn[data-ftab]').forEach(b =>
+    b.classList.toggle('active', b.dataset.ftab === name));
+  document.querySelectorAll('#tab-feed .chart-tab-content').forEach(c =>
+    c.classList.toggle('active', c.id === 'ftab-' + name));
+}
+
 // Sweep range used by the Simulate tab — full physics envelope so every
 // shot that scores is reported. (Shot Table generation passes its own
 // settings and is unaffected.)
 const SIM_SWEEP = {
   speedRange: [5.0, 20.0],
-  angleRange: [10.0, 85.0],
+  angleRange: [40.68, 81.0],
   speedSteps: 150,
   angleSteps: 150,
 };
@@ -690,7 +725,7 @@ function runTableInline(cfg, onProgress, onDone, onError) {
             distance: dist, robotRadialVel: rv, spinRps: cfg.spinRps,
             drag: cfg.drag, magnus: cfg.magnus,
             ceilingHeight: cfg.ceilingHeight,
-            speedRange: [5.0, 20.0], angleRange: [10.0, 85.0],
+            speedRange: [5.0, 20.0], angleRange: [40.68, 81.0],
             speedSteps: 45, angleSteps: 45,
           });
           const optimal = PHYSICS.selectOptimalShot(valid);
@@ -1514,3 +1549,623 @@ window.downloadModalCode = function () {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeCodeModal();
 });
+
+// ── Feed Table ────────────────────────────────────────────────────────────────
+
+// Inline fallback for feed table generation (used when Web Workers are unavailable).
+function runFeedTableInline(cfg, onProgress, onDone, onError) {
+  const linspace = (lo, hi, n) =>
+    Array.from({ length: n }, (_, i) => lo + i * (hi - lo) / (n - 1));
+  const distances  = linspace(cfg.distMin, cfg.distMax, cfg.distSteps);
+  const radialVels = linspace(-3.0, 3.0, cfg.rvSteps);
+  const total = distances.length * radialVels.length;
+  const table = [];
+  let i = 0, j = 0, done = 0, cancelled = false;
+
+  onProgress(0);
+
+  function tick() {
+    if (cancelled) return;
+    const t0 = performance.now();
+    try {
+      while (i < distances.length) {
+        while (j < radialVels.length) {
+          const dist = distances[i], rv = radialVels[j];
+          const valid = PHYSICS.findValidFeedShots({
+            distance: dist, robotRadialVel: rv, spinRps: cfg.spinRps,
+            drag: cfg.drag, magnus: cfg.magnus,
+            speedRange: [3.0, 18.0], angleRange: [40.68, 81.0],
+            speedSteps: 40, angleSteps: 40,
+          });
+          const optimal = PHYSICS.selectOptimalFeedShot(valid, dist);
+          let entry;
+          if (optimal) {
+            entry = {
+              distance: dist, radialVelocity: rv,
+              exitSpeed:      optimal.speed,
+              launchAngle:    optimal.angle,
+              toleranceSpeed: PHYSICS.std(valid.map(s => s.speed)),
+              toleranceAngle: PHYSICS.std(valid.map(s => s.angle)),
+              validCount:     valid.length,
+            };
+          } else {
+            entry = {
+              distance: dist, radialVelocity: rv,
+              exitSpeed: 0, launchAngle: 0,
+              toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
+            };
+          }
+          table.push(entry);
+          done++; j++;
+          if (performance.now() - t0 > 50) {
+            onProgress(Math.round(100 * done / total));
+            setTimeout(tick, 0);
+            return;
+          }
+        }
+        j = 0; i++;
+      }
+      onProgress(100);
+      onDone(table);
+    } catch (err) {
+      console.error('feed inline generation error', err);
+      onError(err);
+    }
+  }
+
+  setTimeout(tick, 0);
+  return { cancel: () => { cancelled = true; } };
+}
+
+window.generateFeedTable = function () {
+  if (activeFeedWorker) {
+    if (typeof activeFeedWorker.terminate === 'function') activeFeedWorker.terminate();
+    else if (typeof activeFeedWorker.cancel === 'function') activeFeedWorker.cancel();
+    activeFeedWorker = null;
+  }
+
+  const distMin  = parseFloat($('feed-dmin').value);
+  const distMax  = parseFloat($('feed-dmax').value);
+  const distSteps = parseInt($('feed-dsteps').value, 10);
+  const rvSteps  = parseInt($('feed-rvsteps').value, 10);
+  const spinRps  = parseFloat($('feed-spin').value);
+  const drag     = $('feed-drag').checked;
+  const magnus   = $('feed-magnus').checked;
+  const cfg = { distMin, distMax, distSteps, rvSteps, spinRps, drag, magnus };
+
+  const status = $('feed-status');
+  const bar    = $('feed-progress-bar');
+  const label  = $('feed-progress-label');
+  const wrap   = $('feed-progress-wrap');
+
+  status.classList.add('hidden');
+  wrap.classList.remove('hidden');
+  bar.style.width = '0%';
+  label.textContent = '0%';
+  $('feed-generate-btn').disabled = true;
+
+  const onProgress = pct => {
+    bar.style.width = pct + '%';
+    label.textContent = pct + '%';
+  };
+
+  const onDone = table => {
+    bar.style.width = '100%';
+    label.textContent = '100% — Done';
+    feedTableEntries = table;
+    feedSolver = new SHOT_TABLE.ShotPolynomialSolver(3);
+    feedSolver.fit(feedTableEntries);
+    feedTableGenerated = true;
+    activeFeedWorker = null;
+    $('feed-generate-btn').disabled = false;
+
+    const validCount = feedTableEntries.filter(e => e.validCount > 0).length;
+    status.className = 'result-box info';
+    status.innerHTML = `${feedTableEntries.length} entries · ${validCount} with valid shots · degree 3`;
+    status.classList.remove('hidden');
+
+    drawFeedTableCharts();
+    drawFeedPolyCurves('feedPolyCurvesChart');
+    drawFeedPolyCurves('feedLookupPolyChart');
+    renderFeedPolyCoeffs();
+  };
+
+  const onError = err => {
+    $('feed-generate-btn').disabled = false;
+    status.className = 'result-box error';
+    status.textContent = 'Error: ' + (err.message || String(err));
+    status.classList.remove('hidden');
+    activeFeedWorker = null;
+  };
+
+  try {
+    const worker = new Worker('worker.js');
+    worker.postMessage({ type: 'generate_feed', config: cfg });
+    worker.onmessage = e => {
+      if (e.data.type === 'progress') onProgress(e.data.pct);
+      else if (e.data.type === 'done')  onDone(e.data.table);
+      else if (e.data.type === 'error') onError(new Error(e.data.message));
+    };
+    worker.onerror = err => onError(err);
+    activeFeedWorker = worker;
+  } catch (_) {
+    activeFeedWorker = runFeedTableInline(cfg, onProgress, onDone, onError);
+  }
+};
+
+function drawFeedTableCharts() {
+  const valid = feedTableEntries.filter(e => e.validCount > 0);
+  if (!valid.length) return;
+
+  const dists = [...new Set(valid.map(e => +e.distance.toFixed(4)))].sort((a, b) => a - b);
+  const rvs   = [...new Set(valid.map(e => +e.radialVelocity.toFixed(4)))].sort((a, b) => a - b);
+
+  const palette = makeColorRamp(rvs.length, 'rgba(123,140,222,');
+  drawLineMap('feedSpeedChart', dists, rvs, valid, 'exitSpeed',   'Exit Speed (m/s)', palette);
+  drawLineMap('feedAngleChart', dists, rvs, valid, 'launchAngle', 'Launch Angle (°)', palette);
+
+  ['feedspeed-empty', 'feedangle-empty'].forEach(id => $(id)?.classList.add('hidden'));
+}
+
+function drawFeedPolyCurves(canvasId = 'feedPolyCurvesChart') {
+  if (!feedTableGenerated) return;
+  const valid = feedTableEntries.filter(e => e.validCount > 0);
+  if (!valid.length) return;
+
+  const distMin = Math.min(...valid.map(e => e.distance));
+  const distMax = Math.max(...valid.map(e => e.distance));
+  const { distances, curves } = feedSolver.sampleCurves(distMin, distMax, 80);
+
+  destroyChart(canvasId);
+  const pal = { '-2': '#e05667', '0': '#56ccf2', '2': '#56e09e' };
+  const lbl = { '-2': 'rv=−2 m/s', '0': 'rv=0 m/s', '2': 'rv=+2 m/s' };
+
+  const datasets = Object.entries(curves).flatMap(([rv, { speeds, angles }]) => [
+    { label: lbl[rv] + ' speed',
+      data: distances.map((d, i) => ({ x: +d.toFixed(3), y: speeds[i] })),
+      borderColor: pal[rv], showLine: true, pointRadius: 0, borderWidth: 2, yAxisID: 'ySpeed' },
+    { label: lbl[rv] + ' angle',
+      data: distances.map((d, i) => ({ x: +d.toFixed(3), y: angles[i] })),
+      borderColor: pal[rv], borderDash: [5, 3], showLine: true, pointRadius: 0,
+      borderWidth: 1.5, yAxisID: 'yAngle' },
+  ]);
+
+  new Chart($(canvasId).getContext('2d'), {
+    type: 'scatter', data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: true, animation: false,
+      plugins: {
+        legend: { labels: { color: TEXT_CLR, font: { size: 10 }, boxWidth: 14 } },
+        zoom: zoomPluginOptions(),
+      },
+      scales: {
+        x:      { ...scaleBase(), title: axisTitle('Distance (m)') },
+        ySpeed: { position: 'left',  ...scaleBase(), title: axisTitle('Speed (m/s)') },
+        yAngle: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: TEXT_CLR }, title: axisTitle('Angle (°)') },
+      },
+    },
+  });
+  if (canvasId === 'feedPolyCurvesChart') $('feedpolycurves-empty')?.classList.add('hidden');
+}
+
+function renderFeedPolyCoeffs() {
+  const display = $('feed-coeffs-display');
+  if (!display || !feedTableGenerated) return;
+
+  const c = feedSolver.getCoefficients();
+  if (!c.terms.length) {
+    display.innerHTML = '<p class="chart-empty">Not enough data to fit polynomials.</p>';
+    return;
+  }
+
+  const rows = c.terms.map(([a, b], i) => `
+    <tr>
+      <td class="poly-term">${termLabel(a, b)}</td>
+      <td>[${a},${b}]</td>
+      <td class="poly-expr">${c.speedCoeffs[i] >= 0 ? '+' : ''}${c.speedCoeffs[i].toExponential(5)}</td>
+      <td class="poly-expr">${c.angleCoeffs[i] >= 0 ? '+' : ''}${c.angleCoeffs[i].toExponential(5)}</td>
+    </tr>`).join('');
+
+  display.innerHTML = `
+    <div class="coeffs-toolbar">
+      <span style="font-size:11px;color:var(--text-muted)">
+        Single degree-${c.degree} surface · d = distance (m) · v = radial velocity (m/s)
+        · f(d,v) = Σ coeff·dᵃ·vᵇ
+      </span>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="poly-coeff-table">
+        <thead>
+          <tr>
+            <th>Term</th><th>[a, b]</th>
+            <th>Speed coeff (m/s)</th><th>Angle coeff (°)</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+window.exportFeedTable = function () {
+  if (!feedTableGenerated) { alert('Generate a feed table first.'); return; }
+  const blob = new Blob([JSON.stringify(feedTableEntries, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'feed_table.json';
+  a.click();
+};
+
+window.importFeedTable = function () {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.json';
+  inp.onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        feedTableEntries = JSON.parse(ev.target.result);
+        feedSolver = new SHOT_TABLE.ShotPolynomialSolver(3);
+        feedSolver.fit(feedTableEntries);
+        feedTableGenerated = true;
+        const validCount = feedTableEntries.filter(e => e.validCount > 0).length;
+        const status = $('feed-status');
+        status.className = 'result-box info';
+        status.innerHTML = `Imported ${feedTableEntries.length} entries · ${validCount} valid`;
+        status.classList.remove('hidden');
+        drawFeedTableCharts();
+        drawFeedPolyCurves('feedPolyCurvesChart');
+        drawFeedPolyCurves('feedLookupPolyChart');
+        renderFeedPolyCoeffs();
+      } catch (err) {
+        alert('Import failed: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+  inp.click();
+};
+
+// ── Feed Simulation ───────────────────────────────────────────────────────────
+
+window.runFeedSimulate = function () {
+  const dist       = val('fsim-dist');
+  const rv         = val('fsim-rv');
+  const spinRps    = val('fsim-spin');
+  const drag       = $('fsim-drag').checked;
+  const magnus     = $('fsim-magnus').checked;
+  const box        = $('fsim-result');
+
+  const valid = PHYSICS.findValidFeedShots({
+    distance: dist, robotRadialVel: rv, spinRps,
+    drag, magnus,
+    speedRange: [3.0, 18.0], angleRange: [40.68, 81.0],
+    speedSteps: 80, angleSteps: 80,
+  });
+  const optimal = PHYSICS.selectOptimalFeedShot(valid, dist);
+
+  if (!optimal) {
+    box.className = 'result-box miss';
+    box.textContent = 'No valid shots found.';
+    box.classList.remove('hidden');
+    return;
+  }
+
+  const result = PHYSICS.simulateFeedShot({
+    exitSpeed: optimal.speed, launchAngleDeg: optimal.angle,
+    spinRps, robotRadialVel: rv, drag, magnus, storeTrajectory: true,
+  });
+
+  const err = result.xLanding - dist;
+  box.className = 'result-box hit';
+  box.innerHTML = `
+    <strong>&#10003; Optimal feed shot (maximum robustness)</strong><br/>
+    Exit speed: <strong>${optimal.speed.toFixed(2)} m/s</strong><br/>
+    Launch angle: <strong>${optimal.angle.toFixed(2)}°</strong><br/>
+    Landing x: ${result.xLanding.toFixed(3)} m
+      <span style="color:#888;font-size:11px">(target ${dist.toFixed(2)} m, error ${err >= 0 ? '+' : ''}${err.toFixed(3)} m)</span><br/>
+    Time of flight: ${result.tof.toFixed(3)} s · valid shots: ${valid.length}
+  `;
+  box.classList.remove('hidden');
+
+  $('feedtraj-empty')?.classList.add('hidden');
+  drawFeedTrajectory(result, dist, optimal);
+};
+
+function drawFeedTrajectory(result, targetDist, optimal) {
+  destroyChart('feedTrajChart');
+  const ctx = $('feedTrajChart').getContext('2d');
+
+  const step = Math.max(1, Math.floor(result.trajX.length / 300));
+  const pts = [];
+  for (let i = 0; i < result.trajX.length; i += step) {
+    pts.push({ x: result.trajX[i], y: result.trajY[i] });
+  }
+
+  const xMax = Math.max(targetDist + 0.5, result.xLanding + 0.3);
+
+  new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        // Floor line
+        { label: 'Floor', data: [{ x: 0, y: 0 }, { x: xMax, y: 0 }],
+          borderColor: 'rgba(100,200,100,0.35)', borderDash: [8, 4],
+          showLine: true, pointRadius: 0, borderWidth: 1.5, order: 5 },
+        // Target marker (single point on floor)
+        { label: 'Target',
+          data: [{ x: targetDist, y: 0 }],
+          borderColor: 'rgba(60,200,80,0.95)', backgroundColor: 'rgba(60,200,80,0.95)',
+          pointRadius: 6, pointStyle: 'crossRot', order: 2 },
+        // Target centre tick
+        { data: [{ x: targetDist, y: 0 }, { x: targetDist, y: 0.25 }],
+          borderColor: 'rgba(60,200,80,0.60)',
+          showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3 },
+        // Landing drop
+        { data: [{ x: result.xLanding, y: 0 }, { x: result.xLanding, y: PHYSICS.SHOOTER_HEIGHT * 0.3 }],
+          borderColor: 'rgba(220,60,60,0.75)',
+          showLine: true, pointRadius: 0, borderWidth: 1.5, order: 3 },
+        // Landing circle
+        { label: 'Landing', data: [{ x: result.xLanding, y: 0 }],
+          backgroundColor: 'rgba(0,0,0,0)', borderColor: 'white',
+          pointRadius: 7, pointStyle: 'circle', borderWidth: 2, showLine: false, order: 1 },
+        // Ball path
+        { label: `${optimal.angle.toFixed(1)}° @ ${optimal.speed.toFixed(2)} m/s`,
+          data: pts, borderColor: '#4488ee',
+          showLine: true, pointRadius: 0, borderWidth: 2.5, order: 1 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true, animation: false,
+      plugins: {
+        legend: { labels: { color: TEXT_CLR, font: { size: 10 },
+          filter: item => !!item.text } },
+        zoom: zoomPluginOptions(),
+      },
+      scales: {
+        x: { ...scaleBase(), title: axisTitle('Distance (m)'), min: 0 },
+        y: { ...scaleBase(), title: axisTitle('Height (m)'), min: -0.05 },
+      },
+    },
+  });
+}
+
+// ── Feed Lookup ───────────────────────────────────────────────────────────────
+
+window.doFeedLookup = function () {
+  const box = $('feedlookup-result');
+  if (!feedTableGenerated) {
+    box.innerHTML = '<span style="color:#e05667">No feed table loaded. Generate or import one first.</span>';
+    return;
+  }
+
+  const dist       = val('flkp-dist');
+  const rv         = val('flkp-rv');
+  const lateralVel = val('flkp-lateral');
+
+  const result = feedSolver.predict(dist, rv);
+  if (!result) {
+    box.innerHTML = '<span style="color:#e05667">No polynomial data at this distance.</span>';
+    return;
+  }
+
+  const rpm = feedSolver.speedToRpm(result.exitSpeed, 1);
+
+  box.innerHTML = `
+    <span class="lbl">Distance:</span>        <span class="val">${dist.toFixed(2)} m</span><br/>
+    <span class="lbl">Radial Velocity:</span>  <span class="val">${rv >= 0 ? '+' : ''}${rv.toFixed(2)} m/s</span><br/>
+    <span class="lbl">Lateral Velocity:</span> <span class="val">${lateralVel >= 0 ? '+' : ''}${lateralVel.toFixed(2)} m/s</span><br/>
+    <br/>
+    <span class="lbl">── Shot Command ───────────────</span><br/>
+    <span class="lbl">Exit Speed:</span>       <span class="val">${result.exitSpeed.toFixed(3)} m/s</span><br/>
+    <span class="lbl">Launch Angle:</span>     <span class="val">${result.launchAngle.toFixed(2)}°</span><br/>
+    <span class="lbl">Flywheel RPM:</span>     <span class="val">${Math.round(rpm)} RPM</span>
+  `;
+
+  // Polynomial-based virtual target — mirrors FeedCalculator.java getShotParams exactly
+  if (rv !== 0 || lateralVel !== 0) {
+    let vdx = dist, vdz = 0, tof = 0;
+    for (let iter = 0; iter < 5; iter++) {
+      const vDist = Math.sqrt(vdx * vdx + vdz * vdz);
+      if (vDist < 0.1) break;
+      const res = feedSolver.predict(vDist, 0);
+      if (!res) break;
+      const cosA   = Math.cos(res.launchAngle * Math.PI / 180);
+      const prevTof = tof;
+      tof = vDist / Math.max(res.exitSpeed * cosA, 0.5);
+      vdx = dist - rv * tof;
+      vdz = -lateralVel * tof;
+      if (iter > 0 && Math.abs(tof - prevTof) < 0.002) break;
+    }
+    const virtualDist  = Math.sqrt(vdx * vdx + vdz * vdz);
+    const yawOffsetDeg = Math.atan2(-lateralVel * tof, dist - rv * tof) * 180 / Math.PI;
+    const vtResult = feedSolver.predict(virtualDist, 0);
+    const yawDir = yawOffsetDeg < -0.05 ? ' (aim right)' :
+                   yawOffsetDeg >  0.05 ? ' (aim left)'  : '';
+    const vtHtml = vtResult
+      ? `<span class="lbl">Virtual speed:</span>    <span class="val">${vtResult.exitSpeed.toFixed(3)} m/s</span><br/>
+         <span class="lbl">Virtual angle:</span>    <span class="val">${vtResult.launchAngle.toFixed(2)}°</span><br/>`
+      : '';
+    box.innerHTML += `
+      <br/>
+      <span class="lbl" style="color:#7b8cde">── Shoot-on-Move (1690) ───────</span><br/>
+      <span class="lbl">Virtual dist:</span>     <span class="val">${virtualDist.toFixed(2)} m</span><br/>
+      <span class="lbl">Yaw offset:</span>       <span class="val">${yawOffsetDeg >= 0 ? '+' : ''}${yawOffsetDeg.toFixed(1)}°${yawDir}</span><br/>
+      ${vtHtml}
+    `;
+  }
+
+  drawFeedPolyCurves('feedLookupPolyChart');
+};
+
+window.generateFeedJava = function () {
+  if (!feedTableGenerated) { alert('Generate a feed table first.'); return; }
+
+  const c       = feedSolver.getCoefficients();
+  const valid   = feedTableEntries.filter(e => e.validCount > 0);
+  const distMin = Math.min(...valid.map(e => e.distance));
+  const distMax = Math.max(...valid.map(e => e.distance));
+  const rvMin   = Math.min(...valid.map(e => e.radialVelocity));
+  const rvMax   = Math.max(...valid.map(e => e.radialVelocity));
+  const hood    = 0;
+  const mps     = 1;
+  const now     = new Date().toISOString().slice(0, 10);
+
+  const maxLabelLen = Math.max(...c.terms.map(([a, b]) => termLabel(a, b).length));
+  const fmtCoeffLine = (coeffArr) =>
+    c.terms.map(([a, b], i) => {
+      const lbl = termLabel(a, b).padEnd(maxLabelLen);
+      return `        /* ${lbl} */  ${javaCoeff(coeffArr[i])}`;
+    }).join(',\n');
+
+  const termsInit = c.terms.map(([a, b], i) => {
+    const expr  = javaTermExpr(a, b);
+    const lbl   = termLabel(a, b).padEnd(maxLabelLen);
+    const comma = i < c.terms.length - 1 ? ',' : ' ';
+    return `            ${expr.padEnd(10)}${comma} // ${lbl}`;
+  }).join('\n');
+
+  const needD2 = c.terms.some(([a])   => a >= 2);
+  const needD3 = c.terms.some(([a])   => a >= 3);
+  const needV2 = c.terms.some(([, b]) => b >= 2);
+  const needV3 = c.terms.some(([, b]) => b >= 3);
+  const precompute = [
+    needD2 ? '        double d2 = d * d;'  : '',
+    needV2 ? '        double v2 = v * v;'  : '',
+    needD3 ? '        double d3 = d2 * d;' : '',
+    needV3 ? '        double v3 = v2 * v;' : '',
+  ].filter(Boolean).join('\n');
+
+  const java =
+`// Generated by FRC 2026 Shot Calculator — ${now}
+// Feed shot — floor target at ${distMin.toFixed(1)}–${distMax.toFixed(1)} m.
+// Optimal shot: maximum robustness (most neighbors in speed×angle space) among shots landing closest to the target.
+// 2D degree-${c.degree} polynomial surface: f(distance_m, radialVel_ms) → {exitSpeed_ms, launchAngle_deg}
+// Monomials: ${c.terms.map(([a, b]) => termLabel(a, b)).join(', ')}
+
+public class FeedCalculator {
+
+    // ── Robot-side tuning constants — edit these on the robot, not on the website ─
+    //   HOOD_OFFSET_DEG — constant angle added to every shot; positive = steeper.
+    //   MPS_FACTOR      — scales every exit-speed command; 1.0 = no scaling.
+    public static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};
+    public static final double MPS_FACTOR      = ${mps.toFixed(6)};
+
+    // ── Fitted range — inputs are clamped to these bounds ────────────────────
+    private static final double DIST_MIN = ${distMin.toFixed(4)};  // metres
+    private static final double DIST_MAX = ${distMax.toFixed(4)};
+    private static final double RV_MIN   = ${rvMin.toFixed(4)};  // m/s
+    private static final double RV_MAX   = ${rvMax.toFixed(4)};
+
+    // ── Input normalisation ───────────────────────────────────────────────────
+    private static final double D_MEAN = ${c.dMean.toFixed(10)};
+    private static final double D_STD  = ${c.dStd.toFixed(10)};
+    private static final double V_MEAN = ${c.vMean.toFixed(10)};
+    private static final double V_STD  = ${c.vStd.toFixed(10)};
+
+    // ── Polynomial coefficients ───────────────────────────────────────────────
+    private static final double[] SPEED_COEFFS = {
+${fmtCoeffLine(c.speedCoeffs)}
+    };
+
+    private static final double[] ANGLE_COEFFS = {
+${fmtCoeffLine(c.angleCoeffs)}
+    };
+
+    // ── Result type ───────────────────────────────────────────────────────────
+
+    public static final class ShotParameters {
+        public final double exitSpeed;
+        public final double launchAngle;
+        public final double yawOffset;
+
+        public ShotParameters(double exitSpeed, double launchAngle, double yawOffset) {
+            this.exitSpeed   = exitSpeed;
+            this.launchAngle = launchAngle;
+            this.yawOffset   = yawOffset;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("ShotParameters{exitSpeed=%.3f m/s, launchAngle=%.2f°, yawOffset=%.2f°}",
+                                 exitSpeed, launchAngle, yawOffset);
+        }
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /**
+     * Compute shooter parameters for a feed shot to the floor target.
+     * Applies the 1690 Orbit iterative virtual-target algorithm for shoot-on-the-move.
+     *
+     * @param distance           horizontal distance to target (metres)
+     * @param radialVelocity     robot velocity toward/away from target (m/s)
+     * @param tangentialVelocity robot velocity perpendicular to robot–target line (m/s)
+     */
+    public static ShotParameters getShotParams(double distance, double radialVelocity,
+                                               double tangentialVelocity) {
+        double vdx = distance;
+        double vdz = 0.0;
+        double tof  = 0.0;
+
+        for (int iter = 0; iter < 5; iter++) {
+            double vDist = Math.sqrt(vdx * vdx + vdz * vdz);
+            if (vDist < 0.1) break;
+
+            double[] raw   = evalPolyRaw(vDist, 0.0);
+            double   speed = raw[0] * MPS_FACTOR;
+            double   angle = raw[1] + HOOD_OFFSET_DEG;
+
+            double cosA    = Math.cos(angle * Math.PI / 180.0);
+            double prevTof = tof;
+            tof = vDist / Math.max(speed * cosA, 0.5);
+
+            vdx = distance - radialVelocity    * tof;
+            vdz =          - tangentialVelocity * tof;
+
+            if (iter > 0 && Math.abs(tof - prevTof) < 0.002) break;
+        }
+
+        double virtualDist  = Math.sqrt(vdx * vdx + vdz * vdz);
+        double yawOffsetDeg = Math.atan2(-tangentialVelocity * tof,
+                                          distance - radialVelocity * tof)
+                              * (180.0 / Math.PI);
+
+        double[] raw = evalPolyRaw(virtualDist, 0.0);
+        return new ShotParameters(
+            raw[0] * MPS_FACTOR,
+            raw[1] + HOOD_OFFSET_DEG,
+            yawOffsetDeg
+        );
+    }
+
+    public static ShotParameters getShotParams(double distance, double radialVelocity) {
+        return getShotParams(distance, radialVelocity, 0.0);
+    }
+
+    // ── Polynomial evaluation ─────────────────────────────────────────────────
+
+    private static double[] evalPolyRaw(double distance, double radialVel) {
+        double d_raw = Math.max(DIST_MIN, Math.min(DIST_MAX, distance));
+        double v_raw = Math.max(RV_MIN,   Math.min(RV_MAX,   radialVel));
+        double d = (d_raw - D_MEAN) / D_STD;
+        double v = (v_raw - V_MEAN) / V_STD;
+
+${precompute}
+
+        double[] terms = {
+${termsInit}
+        };
+
+        double exitSpeed = 0.0, launchAngle = 0.0;
+        for (int i = 0; i < terms.length; i++) {
+            exitSpeed   += SPEED_COEFFS[i] * terms[i];
+            launchAngle += ANGLE_COEFFS[i] * terms[i];
+        }
+        return new double[]{ exitSpeed, launchAngle };
+    }
+}`;
+
+  showCodeModal(java, 'FeedCalculator.java');
+};

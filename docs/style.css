@@ -58,6 +58,42 @@ header {
   padding: 3px 10px;
 }
 
+.mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border-bottom: 2px solid var(--border);
+  padding: 10px 20px;
+}
+
+.mode-bar-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-right: 4px;
+  opacity: 0.6;
+}
+
+.mode-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 6px 20px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.mode-btn:hover { color: var(--text); border-color: var(--accent2); }
+.mode-btn.active { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
 .tab-bar {
   display: flex;
   gap: 2px;

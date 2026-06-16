@@ -150,7 +150,7 @@ const PHYSICS = (() => {
    */
   function findValidShots({
     distance, robotRadialVel = 0, spinRps = 50,
-    speedRange = [5.0, 20.0], angleRange = [10.0, 70.0],
+    speedRange = [5.0, 20.0], angleRange = [40.68, 81.0],
     speedSteps = 50, angleSteps = 50,
     drag = true, magnus = true,
     ceilingHeight = null,
@@ -276,7 +276,7 @@ const PHYSICS = (() => {
       const valid = findValidShots({
         distance: vDist, robotRadialVel: 0,
         spinRps, drag, magnus, ceilingHeight,
-        speedRange: [5.0, 20.0], angleRange: [10.0, 85.0],
+        speedRange: [5.0, 20.0], angleRange: [40.68, 81.0],
         speedSteps: 40, angleSteps: 40,
       });
       const opt = selectOptimalShot(valid);
@@ -310,8 +310,108 @@ const PHYSICS = (() => {
     return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
   }
 
+  // ── Feed shot physics (floor target) ──────────────────────────────────────
+  // Simulates a shot that lands on the floor. No goal geometry — the ball flies
+  // freely until it hits y=0. Returns the horizontal landing position and TOF.
+
+  function simulateFeedShot({
+    exitSpeed, launchAngleDeg,
+    spinRps = 10, robotRadialVel = 0,
+    drag = true, magnus = true,
+    storeTrajectory = true,
+  }) {
+    const rad = launchAngleDeg * Math.PI / 180;
+    let vx = exitSpeed * Math.cos(rad) + robotRadialVel;
+    let vy = exitSpeed * Math.sin(rad);
+    let x  = 0.0;
+    let y  = SHOOTER_HEIGHT;
+    let t  = 0.0;
+    let omega = 2 * Math.PI * spinRps;
+
+    const trajX = storeTrajectory ? [x] : null;
+    const trajY = storeTrajectory ? [y] : null;
+    let prevX = x, prevY = y;
+
+    while (t < MAX_SIM_TIME) {
+      const v2 = vx * vx + vy * vy;
+      const v  = Math.sqrt(v2);
+      let axDrag = 0, ayDrag = 0, axMagnus = 0, ayMagnus = 0;
+
+      if (drag && v > 0) {
+        const f = (0.5 * AIR_DENSITY * DRAG_COEFF * BALL_XSECTION * v2) / BALL_MASS;
+        axDrag = -f * (vx / v);
+        ayDrag = -f * (vy / v);
+      }
+      if (magnus && v > 0) {
+        const fM = (0.5 * AIR_DENSITY * MAGNUS_COEFF * BALL_XSECTION * omega * BALL_RADIUS * v) / BALL_MASS;
+        axMagnus = -fM * (vy / v);
+        ayMagnus = +fM * (vx / v);
+      }
+
+      vx += (axDrag + axMagnus) * DT;
+      vy += (-GRAVITY + ayDrag + ayMagnus) * DT;
+      omega *= (1 - SPIN_DECAY_RATE * DT);
+      prevX = x; prevY = y;
+      x += vx * DT;
+      y += vy * DT;
+      t += DT;
+
+      if (storeTrajectory) { trajX.push(x); trajY.push(y); }
+
+      // Interpolate precise floor-crossing point
+      if (prevY > 0 && y <= 0) {
+        const frac  = prevY / (prevY - y + 1e-12);
+        const xLand = prevX + frac * (x - prevX);
+        return { xLanding: xLand, tof: t, landed: true, trajX, trajY };
+      }
+    }
+
+    return { xLanding: x, tof: t, landed: false, trajX, trajY };
+  }
+
+  function findValidFeedShots({
+    distance, robotRadialVel = 0, spinRps = 10,
+    speedRange = [3.0, 18.0], angleRange = [40.68, 81.0],
+    speedSteps = 50, angleSteps = 50,
+    drag = true, magnus = true,
+  }) {
+    const valid = [];
+    for (let si = 0; si < speedSteps; si++) {
+      const speed = speedRange[0] + si * (speedRange[1] - speedRange[0]) / (speedSteps - 1);
+      for (let ai = 0; ai < angleSteps; ai++) {
+        const angle = angleRange[0] + ai * (angleRange[1] - angleRange[0]) / (angleSteps - 1);
+        const r = simulateFeedShot({
+          exitSpeed: speed, launchAngleDeg: angle,
+          spinRps, robotRadialVel, drag, magnus,
+          storeTrajectory: false,
+        });
+        if (r.landed) {
+          valid.push({ speed, angle, xLanding: r.xLanding, tof: r.tof });
+        }
+      }
+    }
+    return valid;
+  }
+
+  // Picks the shot that lands closest to the target, then maximizes robustness:
+  // the shot with the most neighbors within ±0.5 m/s and ±2° sits deepest inside
+  // the valid region and tolerates the most motor/hood error.
+  function selectOptimalFeedShot(validShots, targetDistance) {
+    if (!validShots.length) return null;
+    const minErr = Math.min(...validShots.map(s => Math.abs(s.xLanding - targetDistance)));
+    const pool = validShots.filter(s => Math.abs(s.xLanding - targetDistance) <= minErr + 0.15);
+    if (pool.length === 1) return pool[0];
+    const DV = 0.5, DA = 2.0;
+    return pool.reduce((best, s) => {
+      const cS = pool.filter(p => Math.abs(p.speed - s.speed) <= DV && Math.abs(p.angle - s.angle) <= DA).length;
+      const cB = pool.filter(p => Math.abs(p.speed - best.speed) <= DV && Math.abs(p.angle - best.angle) <= DA).length;
+      return cS > cB ? s : best;
+    });
+  }
+
   return {
     GOAL_HEIGHT, GOAL_RADIUS, RIM_HEIGHT, WALL_HEIGHT, WALL_TOP, SHOOTER_HEIGHT,
     simulateShot, findValidShots, selectOptimalShot, computeVirtualTarget, std,
+    simulateFeedShot, findValidFeedShots, selectOptimalFeedShot,
   };
 })();

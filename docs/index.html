@@ -23,16 +23,28 @@
     </div>
   </header>
 
-  <nav class="tab-bar">
-    <button class="tab-btn active" data-tab="overview">Overview</button>
+  <nav class="mode-bar">
+    <span class="mode-bar-label">Mode</span>
+    <button class="mode-btn active" data-mode="hub">Hub Shot</button>
+    <button class="mode-btn"        data-mode="feed">Feed Shot</button>
+  </nav>
+
+  <nav class="tab-bar" id="hub-tab-bar">
+    <button class="tab-btn active" data-tab="table">Shot Table</button>
     <button class="tab-btn" data-tab="simulate">Shot Simulation</button>
-    <button class="tab-btn" data-tab="table">Shot Table</button>
-    <button class="tab-btn" data-tab="lookup">Live Lookup</button>
+    <button class="tab-btn" data-tab="lookup">Shot Lookup</button>
     <button class="tab-btn" data-tab="surface">Poly Surface</button>
   </nav>
 
+  <nav class="tab-bar hidden" id="feed-tab-bar">
+    <button class="tab-btn active" data-tab="feed">Shot Table</button>
+    <button class="tab-btn" data-tab="feedsim">Shot Simulation</button>
+    <button class="tab-btn" data-tab="feedlookup">Shot Lookup</button>
+    <button class="tab-btn" data-tab="feedsurface">Poly Surface</button>
+  </nav>
+
   <!-- ── Tab: Overview ─────────────────────────────────────────────────────────────────────────── -->
-  <div id="tab-overview" class="tab-content overview-tab active">
+  <div id="tab-overview" class="tab-content overview-tab">
     <div class="overview-layout">
 
       <!-- ── Sidebar ───────────────────────────────────────────────────── -->
@@ -209,7 +221,7 @@
   </div>
 
   <!-- ── Tab: Table ─────────────────────────────────────────────────────── -->
-  <div id="tab-table" class="tab-content">
+  <div id="tab-table" class="tab-content active">
     <div class="panel-row">
 
       <div class="panel controls-panel">
@@ -391,6 +403,215 @@
     <p id="surface-empty" class="chart-empty" style="padding:80px 0">
       Generate a shot table first, then come back here.
     </p>
+
+  </div>
+
+  <!-- ── Tab: Feed Sim ────────────────────────────────────────────────── -->
+  <div id="tab-feedsim" class="tab-content">
+    <div class="panel-row">
+
+      <div class="panel controls-panel">
+        <h3>Simulate Feed Shot</h3>
+        <div class="form-group">
+          <label>Distance (m)</label>
+          <div class="input-row">
+            <input type="number" id="fsim-dist"    value="7.5" step="0.1" min="0.5" max="15" />
+            <input type="range"  id="fsim-dist-sl" value="7.5" min="0.5" max="15"   step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Radial Velocity (m/s)</label>
+          <div class="input-row">
+            <input type="number" id="fsim-rv"    value="0.0" step="0.1" min="-4" max="4" />
+            <input type="range"  id="fsim-rv-sl" value="0.0" min="-4"   max="4"  step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Spin Rate (rps)</label>
+          <div class="input-row">
+            <input type="number" id="fsim-spin"    value="10" step="1" min="0" max="25" />
+            <input type="range"  id="fsim-spin-sl" value="10" min="0" max="25" step="1" />
+          </div>
+        </div>
+
+        <h3 style="margin-top:16px">Physics</h3>
+        <label class="checkbox-row"><input type="checkbox" id="fsim-drag"   checked /> Aerodynamic Drag</label>
+        <label class="checkbox-row"><input type="checkbox" id="fsim-magnus" checked /> Magnus Effect</label>
+
+        <button class="btn btn-primary" onclick="runFeedSimulate()"
+                style="width:100%;margin-top:16px">Simulate Feed Shot</button>
+
+        <div id="fsim-result" class="result-box hidden" style="margin-top:12px"></div>
+      </div>
+
+      <div class="panel chart-panel">
+        <div class="chart-tabs">
+          <button class="chart-tab-btn active" style="cursor:default">Trajectory</button>
+          <span class="zoom-hint">scroll to zoom · drag to pan · dbl-click to reset</span>
+        </div>
+        <div class="chart-tab-content active">
+          <canvas id="feedTrajChart"></canvas>
+          <p id="feedtraj-empty" class="chart-empty">Simulate a feed shot to see the trajectory.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Tab: Feed Table ──────────────────────────────────────────────── -->
+  <div id="tab-feed" class="tab-content">
+    <div class="panel-row">
+
+      <div class="panel controls-panel">
+        <h3>Generation Config</h3>
+        <div class="form-group">
+          <label>Distance Range (m)</label>
+          <div class="input-row">
+            <input type="number" id="feed-dmin" value="5.0" step="0.5" style="width:68px" />
+            <span style="color:#666">–</span>
+            <input type="number" id="feed-dmax" value="10.0" step="0.5" style="width:68px" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Distance Steps</label>
+          <input type="number" id="feed-dsteps" value="15" min="5" max="50" />
+        </div>
+        <div class="form-group">
+          <label>Radial Vel Steps</label>
+          <input type="number" id="feed-rvsteps" value="7" min="3" max="15" />
+        </div>
+        <h3 style="margin-top:16px">Tuning</h3>
+        <div class="form-group">
+          <label>Spin Rate (rps)</label>
+          <div class="input-row">
+            <input type="number" id="feed-spin"    value="10" step="1" min="0" max="25" />
+            <input type="range"  id="feed-spin-sl" value="10" min="0" max="25" step="1" />
+          </div>
+        </div>
+
+        <h3 style="margin-top:16px">Physics</h3>
+        <label class="checkbox-row"><input type="checkbox" id="feed-drag"   checked /> Aerodynamic Drag</label>
+        <label class="checkbox-row"><input type="checkbox" id="feed-magnus" checked /> Magnus Effect</label>
+
+        <button id="feed-generate-btn" class="btn btn-primary"
+                onclick="generateFeedTable()" style="width:100%;margin-top:16px">
+          Generate Feed Table
+        </button>
+
+        <div id="feed-progress-wrap" class="hidden" style="margin-top:12px">
+          <div class="progress-bar-bg">
+            <div id="feed-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <span id="feed-progress-label" style="font-size:12px;color:#888">0%</span>
+        </div>
+
+        <div class="btn-group" style="margin-top:10px">
+          <button class="btn btn-secondary" onclick="exportFeedTable()" style="flex:1">Export JSON</button>
+          <button class="btn btn-secondary" onclick="importFeedTable()" style="flex:1">Import JSON</button>
+        </div>
+        <button class="btn btn-secondary" onclick="generateFeedJava()"
+                style="width:100%;margin-top:6px">☕ Generate Java</button>
+
+        <div id="feed-status" class="result-box hidden"></div>
+
+        <div class="tuning-note">
+          <strong>Feed shot optimizer:</strong><br/>
+          Maximizes robustness: picks the shot deepest inside the valid speed×angle region.<br/>
+          Use <em>HOOD_OFFSET_DEG</em> and <em>MPS_FACTOR</em> in generated Java for robot-side tuning.
+        </div>
+      </div>
+
+      <div class="panel chart-panel">
+        <div class="chart-tabs">
+          <button class="chart-tab-btn active" data-ftab="feedspeed"  onclick="switchFeedTab('feedspeed')">Speed Map</button>
+          <button class="chart-tab-btn"        data-ftab="feedangle"  onclick="switchFeedTab('feedangle')">Angle Map</button>
+          <button class="chart-tab-btn"        data-ftab="feedcurves" onclick="switchFeedTab('feedcurves')">Poly Curves</button>
+          <button class="chart-tab-btn"        data-ftab="feedcoeffs" onclick="switchFeedTab('feedcoeffs')">Coefficients</button>
+          <span class="zoom-hint">scroll to zoom · drag to pan · dbl-click to reset</span>
+        </div>
+        <div id="ftab-feedspeed"  class="chart-tab-content active">
+          <canvas id="feedSpeedChart"></canvas>
+          <p id="feedspeed-empty"      class="chart-empty">Generate a feed table to see the speed map.</p>
+        </div>
+        <div id="ftab-feedangle"  class="chart-tab-content">
+          <canvas id="feedAngleChart"></canvas>
+          <p id="feedangle-empty"      class="chart-empty">Generate a feed table to see the angle map.</p>
+        </div>
+        <div id="ftab-feedcurves" class="chart-tab-content">
+          <canvas id="feedPolyCurvesChart"></canvas>
+          <p id="feedpolycurves-empty" class="chart-empty">Generate a feed table to see polynomial curves.</p>
+        </div>
+        <div id="ftab-feedcoeffs" class="chart-tab-content">
+          <div id="feed-coeffs-display">
+            <p class="chart-empty">Generate a feed table to see polynomial coefficients.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Tab: Feed Lookup ─────────────────────────────────────────────── -->
+  <div id="tab-feedlookup" class="tab-content">
+    <div class="panel-row">
+
+      <div class="panel controls-panel" style="max-width:320px">
+        <h3>Query Feed Shot</h3>
+        <div class="form-group">
+          <label>Distance (m)</label>
+          <div class="input-row">
+            <input type="number" id="flkp-dist"    value="7.5" step="0.1" min="0.5" max="15" />
+            <input type="range"  id="flkp-dist-sl" value="7.5" min="0.5" max="15"   step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Radial Velocity (m/s)</label>
+          <div class="input-row">
+            <input type="number" id="flkp-rv"    value="0.0" step="0.1" min="-4" max="4" />
+            <input type="range"  id="flkp-rv-sl" value="0.0" min="-4"   max="4"  step="0.1" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Lateral Velocity (m/s)</label>
+          <div class="input-row">
+            <input type="number" id="flkp-lateral"    value="0.0" step="0.1" min="-4" max="4" />
+            <input type="range"  id="flkp-lateral-sl" value="0.0" min="-4"   max="4"  step="0.1" />
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="doFeedLookup()" style="width:100%;margin-top:12px">Get Feed Shot</button>
+        <p style="font-size:12px;color:#666;margin-top:8px">
+          Uses the Feed Table polynomial.<br/>Generate a feed table first.
+        </p>
+      </div>
+
+      <div class="panel" style="flex:1;min-width:0">
+        <h3>Result</h3>
+        <div id="feedlookup-result" class="lookup-result-box">
+          <span style="color:#555">Generate a feed table, then query here.</span>
+        </div>
+
+        <h3 style="margin-top:24px">Polynomial Curves</h3>
+        <canvas id="feedLookupPolyChart" style="max-height:280px"></canvas>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Tab: Feed Poly Surface ──────────────────────────────────────── -->
+  <div id="tab-feedsurface" class="tab-content surface-tab">
+
+    <div class="panel surface-controls-panel">
+      <div class="surface-header">
+        <h3 style="margin:0">Feed Polynomial Curves — f(distance, radial velocity)</h3>
+      </div>
+    </div>
+
+    <div class="panel" style="margin:0 24px 24px;padding:20px">
+      <canvas id="feedSurfaceChart"></canvas>
+      <p id="feedsurface-empty" class="chart-empty">
+        Generate a feed table first, then come back here.
+      </p>
+    </div>
 
   </div>
 
