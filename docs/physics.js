@@ -11,13 +11,13 @@ const PHYSICS = (() => {
   const RIM_HEIGHT     = GOAL_HEIGHT - GOAL_RADIUS;  // = 1.83 m, front lip (72 in)
   const WALL_HEIGHT    = 8 * 0.0254;                 // 8 in rim walls above each rim edge = 0.2032 m
   const WALL_TOP       = RIM_HEIGHT + WALL_HEIGHT;   // top of rim walls = 2.0332 m
-  const BALL_RADIUS    = 0.120;
-  const BALL_MASS      = 0.235;
+  const BALL_RADIUS    = 0.1501 / 2;
+  const BALL_MASS      = 0.215;
   const SHOOTER_HEIGHT = 0.546;
 
   // Aerodynamic constants
   const AIR_DENSITY    = 1.225;
-  const DRAG_COEFF     = 0.55;
+  const DRAG_COEFF     = 0.47;
   const MAGNUS_COEFF   = 0.20;
   const BALL_XSECTION  = Math.PI * BALL_RADIUS * BALL_RADIUS;
 
