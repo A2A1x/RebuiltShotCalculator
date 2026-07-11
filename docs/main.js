@@ -1267,28 +1267,73 @@ window.generateFromOverview = function () {
 
 // ── Java code generation ───────────────────────────────────────────────────────
 
-/** Java expression for a single 2D monomial d^a * v^b (uses pre-computed d2/d3/v2/v3). */
-function javaTermExpr(a, b) {
-  const d = ['', 'd', 'd2', 'd3'];
-  const v = ['', 'v', 'v2', 'v3'];
-  const dp = a <= 3 ? d[a] : `Math.pow(d,${a})`;
-  const vp = b <= 3 ? v[b] : `Math.pow(v,${b})`;
-  if (a === 0 && b === 0) return '1.0';
-  if (a === 0) return vp;
-  if (b === 0) return dp;
-  return `${dp} * ${vp}`;
-}
 
-/** Format a coefficient for Java source: fixed-width scientific notation with sign. */
-function javaCoeff(c) {
-  return (c >= 0 ? ' ' : '') + c.toExponential(10) + (Number.isInteger(c) ? '' : '');
+/** Builds the PolyModel record definition + one named model constant, ready to paste into a robot class. */
+function buildPolyModelSnippet({ c, distMin, distMax, rvMin, rvMax, constName, modelName, modelComment }) {
+  const maxLabelLen = Math.max(...c.terms.map(([a, b]) => termLabel(a, b).length));
+  const basisList   = c.terms.map(([a, b]) => termLabel(a, b)).join(', ');
+
+  const fmtCoeffBlock = (coeffArr) =>
+    c.terms.map(([a, b], i) => {
+      const lbl   = termLabel(a, b).padEnd(maxLabelLen);
+      const val   = coeffArr[i].toExponential(10);
+      const comma = i < c.terms.length - 1 ? ',' : '';
+      return `                        /* ${lbl} */ ${val}${comma}`;
+    }).join('\n');
+
+  return `\
+    /**
+     * A fitted degree-${c.degree} polynomial surface plus its input domain and normalisation. Inputs are
+     * mapped to zero-mean unit-variance before evaluation, so the coefficients live in normalised
+     * space and must not be applied to raw (metres / m/s) inputs directly.
+     *
+     * @param name        descriptive name for telemetry
+     * @param distMin     fitted distance lower bound (metres); inputs clamped, shots outside flagged invalid
+     * @param distMax     fitted distance upper bound (metres)
+     * @param rvMin       fitted radial-velocity lower bound (m/s)
+     * @param rvMax       fitted radial-velocity upper bound (m/s)
+     * @param dMean       distance normalisation mean
+     * @param dStd        distance normalisation standard deviation
+     * @param vMean       radial-velocity normalisation mean
+     * @param vStd        radial-velocity normalisation standard deviation
+     * @param speedCoeffs exit-speed coefficients in the monomial basis ${basisList}
+     * @param angleCoeffs launch-angle coefficients in the same basis
+     */
+    private record PolyModel(
+            String name,
+            double distMin,
+            double distMax,
+            double rvMin,
+            double rvMax,
+            double dMean,
+            double dStd,
+            double vMean,
+            double vStd,
+            double[] speedCoeffs,
+            double[] angleCoeffs) {}
+
+    /** ${modelComment} */
+    private static final PolyModel ${constName} =
+            new PolyModel(
+                    "${modelName}",
+                    ${distMin.toFixed(1)}, // distMin (m)
+                    ${distMax.toFixed(1)}, // distMax (m)
+                    ${rvMin.toFixed(1)}, // rvMin (m/s)
+                    ${rvMax.toFixed(1)}, // rvMax (m/s)
+                    ${c.dMean.toFixed(10)}, // dMean
+                    ${c.dStd.toFixed(10)}, // dStd
+                    ${c.vMean.toFixed(10)}, // vMean
+                    ${c.vStd.toFixed(10)}, // vStd
+                    new double[] {
+${fmtCoeffBlock(c.speedCoeffs)}
+                    },
+                    new double[] {
+${fmtCoeffBlock(c.angleCoeffs)}
+                    });`;
 }
 
 window.generateJava = function () {
-  if (!tableGenerated) {
-    alert('Generate a shot table first.');
-    return;
-  }
+  if (!tableGenerated) { alert('Generate a shot table first.'); return; }
 
   const c       = solver.getCoefficients();
   const valid   = tableEntries.filter(e => e.validCount > 0);
@@ -1296,216 +1341,13 @@ window.generateJava = function () {
   const distMax = Math.max(...valid.map(e => e.distance));
   const rvMin   = Math.min(...valid.map(e => e.radialVelocity));
   const rvMax   = Math.max(...valid.map(e => e.radialVelocity));
-  const hood    = 0;
-  const mps     = 1;
-  const now     = new Date().toISOString().slice(0, 10);
 
-  // Coefficient arrays: one line per term with label comment
-  const maxLabelLen = Math.max(...c.terms.map(([a, b]) => termLabel(a, b).length));
-  const fmtCoeffLine = (coeffArr) =>
-    c.terms.map(([a, b], i) => {
-      const lbl = termLabel(a, b).padEnd(maxLabelLen);
-      return `        /* ${lbl} */  ${javaCoeff(coeffArr[i])}`;
-    }).join(',\n');
-
-  // terms[] initializer used inside evalPolyRaw
-  // Comma goes BEFORE the // comment so Java sees it as part of the code, not the comment.
-  const termsInit = c.terms.map(([a, b], i) => {
-    const expr  = javaTermExpr(a, b);
-    const lbl   = termLabel(a, b).padEnd(maxLabelLen);
-    const comma = i < c.terms.length - 1 ? ',' : ' ';
-    return `            ${expr.padEnd(10)}${comma} // ${lbl}`;
-  }).join('\n');
-
-  // Pre-computed powers needed by the polynomial
-  const needD2 = c.terms.some(([a])    => a >= 2);
-  const needD3 = c.terms.some(([a])    => a >= 3);
-  const needV2 = c.terms.some(([, b])  => b >= 2);
-  const needV3 = c.terms.some(([, b])  => b >= 3);
-  // Emit in dependency order: d2 before d3, v2 before v3
-  const precompute = [
-    needD2 ? '        double d2 = d * d;'   : '',
-    needV2 ? '        double v2 = v * v;'   : '',
-    needD3 ? '        double d3 = d2 * d;'  : '',
-    needV3 ? '        double v3 = v2 * v;'  : '',
-  ].filter(Boolean).join('\n');
-
-  const java =
-`// Generated by FRC 2026 Shot Calculator — ${now}
-// 2D degree-${c.degree} polynomial surface: f(distance_m, radialVel_ms) → {exitSpeed_ms, launchAngle_deg}
-// Monomials in order: ${c.terms.map(([a,b]) => termLabel(a,b)).join(', ')}
-
-public class ShotCalculator {
-
-    // ── Robot-side tuning constants — edit these on the robot, not on the website ─
-    // The polynomial encodes raw physics (MPS_FACTOR = 1, HOOD_OFFSET_DEG = 0 at
-    // generation time). Apply corrections here so you can re-tune without
-    // regenerating the polynomial.
-    //   HOOD_OFFSET_DEG — constant angle added to every shot; measure from
-    //                     slow-motion video; positive = steeper.
-    //   MPS_FACTOR      — scales every exit-speed command; nudge until shots
-    //                     go in across all distances; 1.0 = no scaling.
-    public static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};
-    public static final double MPS_FACTOR      = ${mps.toFixed(6)};
-
-    // ── Fitted range — inputs are clamped to these bounds ────────────────────
-    private static final double DIST_MIN = ${distMin.toFixed(4)};  // metres
-    private static final double DIST_MAX = ${distMax.toFixed(4)};
-    private static final double RV_MIN   = ${rvMin.toFixed(4)};  // m/s
-    private static final double RV_MAX   = ${rvMax.toFixed(4)};
-
-    // ── Input normalisation (applied before polynomial evaluation) ────────────
-    // Inputs are mapped to zero-mean unit-variance before the polynomial is
-    // evaluated. Coefficients are in normalised space and must NOT be used
-    // with raw (metres / m/s) inputs directly.
-    private static final double D_MEAN = ${c.dMean.toFixed(10)};
-    private static final double D_STD  = ${c.dStd.toFixed(10)};
-    private static final double V_MEAN = ${c.vMean.toFixed(10)};
-    private static final double V_STD  = ${c.vStd.toFixed(10)};
-
-    // ── Polynomial coefficients ───────────────────────────────────────────────
-    // Both arrays share the same monomial basis (in normalised input space).
-    // f(d_norm, v_norm) = Σ COEFFS[i] · d_norm^a[i] · v_norm^b[i]
-    private static final double[] SPEED_COEFFS = {
-${fmtCoeffLine(c.speedCoeffs)}
-    };
-
-    private static final double[] ANGLE_COEFFS = {
-${fmtCoeffLine(c.angleCoeffs)}
-    };
-
-    // ── Result type ───────────────────────────────────────────────────────────
-
-    /** Immutable shot command returned by {@link #getShotParams}. */
-    public static final class ShotParameters {
-        /** Ball exit speed in m/s, scaled by MPS_FACTOR. Multiply by your RPM_PER_MPS constant to get flywheel RPM. */
-        public final double exitSpeed;
-        /** Shooter launch angle in degrees, with HOOD_OFFSET_DEG added. Command directly to the hood/pivot. */
-        public final double launchAngle;
-        /**
-         * Yaw correction to apply before firing (degrees).
-         * Positive = aim left, negative = aim right.
-         * Zero when robot is not moving tangentially.
-         */
-        public final double yawOffset;
-
-        public ShotParameters(double exitSpeed, double launchAngle, double yawOffset) {
-            this.exitSpeed   = exitSpeed;
-            this.launchAngle = launchAngle;
-            this.yawOffset   = yawOffset;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("ShotParameters{exitSpeed=%.3f m/s, launchAngle=%.2f°, yawOffset=%.2f°}",
-                                 exitSpeed, launchAngle, yawOffset);
-        }
-    }
-
-    // ── Public API ────────────────────────────────────────────────────────────
-
-    /**
-     * Compute shooter exit speed, launch angle, and yaw correction from robot state.
-     *
-     * Applies the 1690 Orbit iterative virtual-target algorithm for shoot-on-the-move:
-     * each pass looks up the polynomial at the current virtual aim point, estimates
-     * time-of-flight from horizontal kinematics, shifts the aim point by how far the
-     * robot moves during that flight, and repeats until TOF converges (≤ 5 passes,
-     * typically 2–3).
-     *
-     * @param distance           horizontal distance to goal centre (metres)
-     * @param radialVelocity     robot velocity toward/away from goal (m/s);
-     *                           positive = closing on goal
-     * @param tangentialVelocity robot velocity perpendicular to the robot–goal line (m/s)
-     * @return {@link ShotParameters} containing exitSpeed, launchAngle, and yawOffset.
-     *         exitSpeed   — m/s scaled by MPS_FACTOR; convert to RPM with your
-     *                       wheel geometry: RPM = exitSpeed * RPM_PER_MPS.
-     *         launchAngle — degrees with HOOD_OFFSET_DEG added; command directly
-     *                       to the hood/pivot mechanism.
-     *         yawOffset   — add to current heading before firing.
-     */
-    public static ShotParameters getShotParams(double distance, double radialVelocity,
-                                               double tangentialVelocity) {
-        // ── 1690 iterative virtual-target solver ──────────────────────────────
-        double vdx = distance;  // virtual aim point — radial component (m)
-        double vdz = 0.0;       // virtual aim point — lateral component (m)
-        double tof  = 0.0;      // converged time-of-flight estimate (s)
-
-        for (int iter = 0; iter < 5; iter++) {
-            double vDist = Math.sqrt(vdx * vdx + vdz * vdz);
-            if (vDist < 0.1) break;
-
-            // Evaluate polynomial at virtual distance with rv = 0.
-            // Robot motion is already encoded in the shifted aim point.
-            double[] raw   = evalPolyRaw(vDist, 0.0);
-            double   speed = raw[0] * MPS_FACTOR;
-            double   angle = raw[1] + HOOD_OFFSET_DEG;
-
-            // Approximate TOF from horizontal kinematics (~5 % error, sufficient for correction)
-            double cosA    = Math.cos(angle * Math.PI / 180.0);
-            double prevTof = tof;
-            tof = vDist / Math.max(speed * cosA, 0.5);  // 0.5 guards div-by-zero
-
-            // Shift virtual aim point: where the goal will be when the ball arrives
-            vdx = distance - radialVelocity    * tof;
-            vdz =          - tangentialVelocity * tof;
-
-            if (iter > 0 && Math.abs(tof - prevTof) < 0.002) break;
-        }
-
-        // ── Final shot parameters at converged virtual aim point ──────────────
-        double virtualDist  = Math.sqrt(vdx * vdx + vdz * vdz);
-
-        // Yaw: angle from radial axis to virtual aim point
-        double yawOffsetDeg = Math.atan2(-tangentialVelocity * tof,
-                                          distance - radialVelocity * tof)
-                              * (180.0 / Math.PI);
-
-        double[] raw = evalPolyRaw(virtualDist, 0.0);
-        return new ShotParameters(
-            raw[0] * MPS_FACTOR,              // exitSpeed, scaled
-            raw[1] + HOOD_OFFSET_DEG,         // launchAngle, offset applied
-            yawOffsetDeg
-        );
-    }
-
-    /** Convenience overload — use when robot is not moving laterally. */
-    public static ShotParameters getShotParams(double distance, double radialVelocity) {
-        return getShotParams(distance, radialVelocity, 0.0);
-    }
-
-    // ── Polynomial evaluation ─────────────────────────────────────────────────
-
-    /**
-     * Evaluates the raw polynomial surface at (distance, radialVel).
-     * Inputs are clamped to the fitted data range.
-     * Returns raw physics values — MPS_FACTOR and HOOD_OFFSET_DEG are applied
-     * by the caller ({@link #getShotParams}) after this returns.
-     *
-     * @return double[] { exitSpeed_ms, launchAngle_deg }
-     */
-    private static double[] evalPolyRaw(double distance, double radialVel) {
-        double d_raw = Math.max(DIST_MIN, Math.min(DIST_MAX, distance));
-        double v_raw = Math.max(RV_MIN,   Math.min(RV_MAX,   radialVel));
-        double d = (d_raw - D_MEAN) / D_STD;
-        double v = (v_raw - V_MEAN) / V_STD;
-
-${precompute}
-
-        double[] terms = {
-${termsInit}
-        };
-
-        double exitSpeed = 0.0, launchAngle = 0.0;
-        for (int i = 0; i < terms.length; i++) {
-            exitSpeed   += SPEED_COEFFS[i] * terms[i];
-            launchAngle += ANGLE_COEFFS[i] * terms[i];
-        }
-        return new double[]{ exitSpeed, launchAngle };
-    }
-}`;
-
-  showCodeModal(java, 'ShotCalculator.java');
+  showCodeModal(buildPolyModelSnippet({
+    c, distMin, distMax, rvMin, rvMax,
+    constName:    'HUB_MODEL',
+    modelName:    'Hub Shot Model',
+    modelComment: 'Hub-shot model — used when the robot is in a scoring zone.',
+  }), 'ShotCalculator.java');
 };
 
 // ── Code modal helpers ─────────────────────────────────────────────────────────
@@ -2008,164 +1850,11 @@ window.generateFeedJava = function () {
   const distMax = Math.max(...valid.map(e => e.distance));
   const rvMin   = Math.min(...valid.map(e => e.radialVelocity));
   const rvMax   = Math.max(...valid.map(e => e.radialVelocity));
-  const hood    = 0;
-  const mps     = 1;
-  const now     = new Date().toISOString().slice(0, 10);
 
-  const maxLabelLen = Math.max(...c.terms.map(([a, b]) => termLabel(a, b).length));
-  const fmtCoeffLine = (coeffArr) =>
-    c.terms.map(([a, b], i) => {
-      const lbl = termLabel(a, b).padEnd(maxLabelLen);
-      return `        /* ${lbl} */  ${javaCoeff(coeffArr[i])}`;
-    }).join(',\n');
-
-  const termsInit = c.terms.map(([a, b], i) => {
-    const expr  = javaTermExpr(a, b);
-    const lbl   = termLabel(a, b).padEnd(maxLabelLen);
-    const comma = i < c.terms.length - 1 ? ',' : ' ';
-    return `            ${expr.padEnd(10)}${comma} // ${lbl}`;
-  }).join('\n');
-
-  const needD2 = c.terms.some(([a])   => a >= 2);
-  const needD3 = c.terms.some(([a])   => a >= 3);
-  const needV2 = c.terms.some(([, b]) => b >= 2);
-  const needV3 = c.terms.some(([, b]) => b >= 3);
-  const precompute = [
-    needD2 ? '        double d2 = d * d;'  : '',
-    needV2 ? '        double v2 = v * v;'  : '',
-    needD3 ? '        double d3 = d2 * d;' : '',
-    needV3 ? '        double v3 = v2 * v;' : '',
-  ].filter(Boolean).join('\n');
-
-  const java =
-`// Generated by FRC 2026 Shot Calculator — ${now}
-// Feed shot — floor target at ${distMin.toFixed(1)}–${distMax.toFixed(1)} m.
-// Optimal shot: maximum robustness (most neighbors in speed×angle space) among shots landing closest to the target.
-// 2D degree-${c.degree} polynomial surface: f(distance_m, radialVel_ms) → {exitSpeed_ms, launchAngle_deg}
-// Monomials: ${c.terms.map(([a, b]) => termLabel(a, b)).join(', ')}
-
-public class FeedCalculator {
-
-    // ── Robot-side tuning constants — edit these on the robot, not on the website ─
-    //   HOOD_OFFSET_DEG — constant angle added to every shot; positive = steeper.
-    //   MPS_FACTOR      — scales every exit-speed command; 1.0 = no scaling.
-    public static final double HOOD_OFFSET_DEG = ${hood.toFixed(4)};
-    public static final double MPS_FACTOR      = ${mps.toFixed(6)};
-
-    // ── Fitted range — inputs are clamped to these bounds ────────────────────
-    private static final double DIST_MIN = ${distMin.toFixed(4)};  // metres
-    private static final double DIST_MAX = ${distMax.toFixed(4)};
-    private static final double RV_MIN   = ${rvMin.toFixed(4)};  // m/s
-    private static final double RV_MAX   = ${rvMax.toFixed(4)};
-
-    // ── Input normalisation ───────────────────────────────────────────────────
-    private static final double D_MEAN = ${c.dMean.toFixed(10)};
-    private static final double D_STD  = ${c.dStd.toFixed(10)};
-    private static final double V_MEAN = ${c.vMean.toFixed(10)};
-    private static final double V_STD  = ${c.vStd.toFixed(10)};
-
-    // ── Polynomial coefficients ───────────────────────────────────────────────
-    private static final double[] SPEED_COEFFS = {
-${fmtCoeffLine(c.speedCoeffs)}
-    };
-
-    private static final double[] ANGLE_COEFFS = {
-${fmtCoeffLine(c.angleCoeffs)}
-    };
-
-    // ── Result type ───────────────────────────────────────────────────────────
-
-    public static final class ShotParameters {
-        public final double exitSpeed;
-        public final double launchAngle;
-        public final double yawOffset;
-
-        public ShotParameters(double exitSpeed, double launchAngle, double yawOffset) {
-            this.exitSpeed   = exitSpeed;
-            this.launchAngle = launchAngle;
-            this.yawOffset   = yawOffset;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("ShotParameters{exitSpeed=%.3f m/s, launchAngle=%.2f°, yawOffset=%.2f°}",
-                                 exitSpeed, launchAngle, yawOffset);
-        }
-    }
-
-    // ── Public API ────────────────────────────────────────────────────────────
-
-    /**
-     * Compute shooter parameters for a feed shot to the floor target.
-     * Applies the 1690 Orbit iterative virtual-target algorithm for shoot-on-the-move.
-     *
-     * @param distance           horizontal distance to target (metres)
-     * @param radialVelocity     robot velocity toward/away from target (m/s)
-     * @param tangentialVelocity robot velocity perpendicular to robot–target line (m/s)
-     */
-    public static ShotParameters getShotParams(double distance, double radialVelocity,
-                                               double tangentialVelocity) {
-        double vdx = distance;
-        double vdz = 0.0;
-        double tof  = 0.0;
-
-        for (int iter = 0; iter < 5; iter++) {
-            double vDist = Math.sqrt(vdx * vdx + vdz * vdz);
-            if (vDist < 0.1) break;
-
-            double[] raw   = evalPolyRaw(vDist, 0.0);
-            double   speed = raw[0] * MPS_FACTOR;
-            double   angle = raw[1] + HOOD_OFFSET_DEG;
-
-            double cosA    = Math.cos(angle * Math.PI / 180.0);
-            double prevTof = tof;
-            tof = vDist / Math.max(speed * cosA, 0.5);
-
-            vdx = distance - radialVelocity    * tof;
-            vdz =          - tangentialVelocity * tof;
-
-            if (iter > 0 && Math.abs(tof - prevTof) < 0.002) break;
-        }
-
-        double virtualDist  = Math.sqrt(vdx * vdx + vdz * vdz);
-        double yawOffsetDeg = Math.atan2(-tangentialVelocity * tof,
-                                          distance - radialVelocity * tof)
-                              * (180.0 / Math.PI);
-
-        double[] raw = evalPolyRaw(virtualDist, 0.0);
-        return new ShotParameters(
-            raw[0] * MPS_FACTOR,
-            raw[1] + HOOD_OFFSET_DEG,
-            yawOffsetDeg
-        );
-    }
-
-    public static ShotParameters getShotParams(double distance, double radialVelocity) {
-        return getShotParams(distance, radialVelocity, 0.0);
-    }
-
-    // ── Polynomial evaluation ─────────────────────────────────────────────────
-
-    private static double[] evalPolyRaw(double distance, double radialVel) {
-        double d_raw = Math.max(DIST_MIN, Math.min(DIST_MAX, distance));
-        double v_raw = Math.max(RV_MIN,   Math.min(RV_MAX,   radialVel));
-        double d = (d_raw - D_MEAN) / D_STD;
-        double v = (v_raw - V_MEAN) / V_STD;
-
-${precompute}
-
-        double[] terms = {
-${termsInit}
-        };
-
-        double exitSpeed = 0.0, launchAngle = 0.0;
-        for (int i = 0; i < terms.length; i++) {
-            exitSpeed   += SPEED_COEFFS[i] * terms[i];
-            launchAngle += ANGLE_COEFFS[i] * terms[i];
-        }
-        return new double[]{ exitSpeed, launchAngle };
-    }
-}`;
-
-  showCodeModal(java, 'FeedCalculator.java');
+  showCodeModal(buildPolyModelSnippet({
+    c, distMin, distMax, rvMin, rvMax,
+    constName:    'FEED_MODEL',
+    modelName:    'Feed Shot Model',
+    modelComment: 'Feed-shot model — floor target, optimised for maximum robustness.',
+  }), 'FeedCalculator.java');
 };
