@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!--
+  Self-check for the generated time-of-flight surface.
+  Serve docs/ and open http://localhost:5173/check.html — results print below.
+-->
+<meta charset="utf-8">
+<title>Shot Calculator — self-check</title>
+<style>
+  body { background:#101820; color:#f6f2f4; font:13px/1.6 Consolas, monospace; padding:24px; }
+  .pass { color:#56e09e; } .fail { color:#e05667; font-weight:700; } .note { color:#7c7fab; }
+</style>
+<pre id="out">running…</pre>
+
+<script src="physics.js"></script>
+<script src="shot_table.js"></script>
+<script>
+const lines = [];
+let failed = 0;
+const log = (msg, cls = 'note') => lines.push(`<span class="${cls}">${msg}</span>`);
+const ok  = (cond, msg) => { if (cond) log('PASS  ' + msg, 'pass'); else { failed++; log('FAIL  ' + msg, 'fail'); } };
+const rmsMax = arr => ({
+  rms: Math.sqrt(arr.reduce((s, r) => s + r * r, 0) / arr.length),
+  max: Math.max(...arr),
+});
+
+const linspace = (lo, hi, n) => Array.from({ length: n }, (_, i) => lo + i * (hi - lo) / (n - 1));
+const SPIN = 50;
+const SWEEP = { speedRange: [5.0, 20.0], angleRange: [40.68, 81.0], speedSteps: 45, angleSteps: 45 };
+
+// Build a hub table at the default generation settings, same as the worker does.
+const table = [];
+for (const distance of linspace(1.5, 8.0, 20)) {
+  for (const rv of linspace(-3, 3, 7)) {
+    const valid = PHYSICS.findValidShots({ distance, robotRadialVel: rv, spinRps: SPIN, ...SWEEP });
+    const best  = PHYSICS.selectOptimalShot(valid);
+    table.push(best
+      ? { distance, radialVelocity: rv, exitSpeed: best.speed, launchAngle: best.angle,
+          timeOfFlight: best.tof, validCount: valid.length }
+      : { distance, radialVelocity: rv, exitSpeed: 0, launchAngle: 0,
+          timeOfFlight: 0, validCount: 0 });
+  }
+}
+
+const fitted = table.filter(e => e.validCount > 0);
+ok(fitted.length > 100, `sweep produced ${fitted.length} scoring cells`);
+ok(fitted.every(e => e.timeOfFlight > 0.1 && e.timeOfFlight < 3.0),
+   'every scoring cell carries a plausible time of flight');
+
+const solver = new SHOT_TABLE.ShotPolynomialSolver(3);
+solver.fit(table);
+
+// The load-bearing property: the fitted TOF must predict the flight time of the
+// shot the fitted speed/angle surfaces actually command. Comparing it against the
+// raw table instead would just measure grid jitter — the speed and angle surfaces
+// smooth their own columns every bit as hard (see the reference residuals below).
+const commandErrs = fitted.map(e => {
+  const p = solver.predict(e.distance, e.radialVelocity);
+  const r = PHYSICS.simulateShot({
+    distance: e.distance, exitSpeed: p.exitSpeed, launchAngleDeg: p.launchAngle,
+    spinRps: SPIN, robotRadialVel: e.radialVelocity, storeTrajectory: false });
+  return Math.abs(r.tof - p.timeOfFlight);
+});
+const cmd = rmsMax(commandErrs);
+ok(cmd.rms < 0.05, `predicted TOF tracks the commanded shot: rms ${cmd.rms.toFixed(4)} s < 0.05 s`);
+ok(cmd.max < 0.20, `worst-case commanded-shot TOF error ${cmd.max.toFixed(4)} s < 0.20 s`);
+
+const raw = ['exitSpeed', 'launchAngle', 'timeOfFlight'].map(f =>
+  `${f} ${rmsMax(fitted.map(e => Math.abs(solver.predict(e.distance, e.radialVelocity)[f] - e[f]))).rms.toFixed(3)}`);
+log(`      reference — rms smoothing applied to each raw column: ${raw.join(', ')}`);
+
+// A table without TOF data must still fit speed/angle and report no TOF.
+const legacy = new SHOT_TABLE.ShotPolynomialSolver(3);
+legacy.fit(table.map(({ timeOfFlight, ...rest }) => rest));
+ok(legacy.predict(4, 0).timeOfFlight === null,
+   'a table with no TOF data predicts null, not a bogus number');
+ok(legacy.predict(4, 0).exitSpeed > 0, 'a table with no TOF data still fits exit speed');
+
+// Standing still, the virtual target is the real target.
+const still = solver.solveVirtualTarget(5.0, 0, 0);
+ok(Math.abs(still.virtualDist - 5.0) < 1e-9, 'stationary virtual distance equals the real distance');
+ok(still.yawOffsetDeg === 0, 'stationary yaw offset is zero');
+ok(Math.abs(still.tof - solver.predict(5.0, 0).timeOfFlight) < 1e-9,
+   'stationary flight time comes straight off the map');
+
+// Moving: the solve must converge to a lead consistent with the map, and the map's
+// flight time must survive contact with the simulator at the virtual distance.
+const moving = solver.solveVirtualTarget(5.0, 1.5, 2.0);
+ok(Math.abs(moving.tof - solver.predict(moving.virtualDist, 0).timeOfFlight) < 0.01,
+   'virtual-target iteration converges on the TOF map');
+ok(moving.virtualDist < 5.0, 'closing on the goal shortens the virtual distance');
+ok(moving.yawOffsetDeg < -1, 'moving left leads the shot to the right');
+
+const vp  = solver.predict(moving.virtualDist, 0);
+const vr  = PHYSICS.simulateShot({ distance: moving.virtualDist, exitSpeed: vp.exitSpeed,
+              launchAngleDeg: vp.launchAngle, spinRps: SPIN, storeTrajectory: false });
+ok(Math.abs(vr.tof - moving.tof) < 0.05,
+   `lead time holds up under simulation: map ${moving.tof.toFixed(3)} s vs simulated ${vr.tof.toFixed(3)} s`);
+ok(vr.hit, 'the commanded virtual shot still scores');
+
+lines.push('', failed ? `<span class="fail">${failed} check(s) failed</span>`
+                      : '<span class="pass">all checks passed</span>');
+document.getElementById('out').innerHTML = lines.join('\n');
+console.log(failed ? `${failed} check(s) failed` : 'all checks passed');
+</script>

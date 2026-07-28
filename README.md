@@ -25,9 +25,9 @@ Instead of empirically tuning a full lookup map, this system:
 
 1. **Simulates the full valid shot region** at every (distance, radial velocity) cell: every (speed, angle) pair that scores or lands on target. Gives a direct measure of shot robustness.
 2. **Selects the optimal shot** using a mode-specific criterion (see below).
-3. **Fits a single 2D degree-3 polynomial surface** jointly across all (distance, radial velocity) data using least-squares normal equations solved by Gauss-Jordan with partial pivoting. One surface per output; no per-rv interpolation or table switching at runtime.
+3. **Fits a single 2D degree-3 polynomial surface** jointly across all (distance, radial velocity) data using least-squares normal equations solved by Gauss-Jordan with partial pivoting. One surface per output (exit speed, launch angle, time of flight); no per-rv interpolation or table switching at runtime.
 4. **Reduces tuning to two scalar parameters** that correct the entire shot envelope at once.
-5. **Compensates for robot motion at runtime** using an iterative virtual-target solver (1690 Orbit technique).
+5. **Compensates for robot motion at runtime** using an iterative virtual-target solver (1690 Orbit technique) that reads flight time off the fitted TOF surface, so the robot never simulates or estimates a trajectory.
 
 ### Hub Shot Optimal Selection
 Picks the shot that maximizes the std-normalised margin from the valid-region boundary along both speed and angle axes, with centroid proximity as a tiebreak. Produces smooth variation across adjacent cells.
@@ -54,7 +54,7 @@ Picks the shot that maximizes the std-normalised margin from the valid-region bo
 
 ## 2D Polynomial Surface
 
-Maps `(distance, radialVelocity) -> exitSpeed` and `(distance, radialVelocity) -> launchAngle` using a single degree-3 fit across all table data simultaneously.
+Maps `(distance, radialVelocity)` to `exitSpeed`, `launchAngle`, and `timeOfFlight` using a single degree-3 fit across all table data simultaneously.
 
 **Basis**: all monomials `d^a * v^b` with `a + b <= 3` (10 terms):
 
@@ -62,9 +62,17 @@ Maps `(distance, radialVelocity) -> exitSpeed` and `(distance, radialVelocity) -
 1,  d,  v,  d^2,  d*v,  v^2,  d^3,  d^2*v,  d*v^2,  v^3
 ```
 
-**Fit**: least-squares normal equations `(A^T A) c = A^T y`, solved by Gauss-Jordan with partial pivoting. One solve per output (speed, angle). Inputs are zero-mean unit-variance normalised before fitting.
+**Fit**: least-squares normal equations `(A^T A) c = A^T y`, solved by Gauss-Jordan with partial pivoting. One solve per output (speed, angle, TOF). Inputs are zero-mean unit-variance normalised before fitting.
 
 **Runtime**: `O(1)` evaluation: `f(d,v) = sum(c_i * d^a_i * v^b_i)`. Inputs are clamped to the fitted data range before normalisation.
+
+### Time-of-Flight Surface
+
+The optimal shot at each cell also yields its simulated flight time, fitted as a third surface. Reading flight time from this map removes the only runtime step that still needed a trajectory: the shoot-on-the-move iteration.
+
+The fit smooths the raw TOF column much as it smooths speed and angle, since the grid-optimal shot jumps between neighbouring solutions from cell to cell. What matters is not agreement with that jittery column but agreement with the shot the surfaces actually command: at the default settings the predicted TOF is within **16 ms rms (130 ms worst case)** of simulating the polynomial's own speed/angle output. `docs/check.html` asserts this.
+
+Tables generated before this surface existed still import and fit; `predict()` then returns a null `timeOfFlight` and the virtual-target solver falls back to the old ballistic estimate `vDist / (speed * cos(angle))`.
 
 ---
 
@@ -75,7 +83,7 @@ Maps `(distance, radialVelocity) -> exitSpeed` and `(distance, radialVelocity) -
 **Tangential velocity** (perpendicular to the shot line) is compensated at runtime:
 
 1. Start with the virtual aim point at the actual target distance.
-2. Evaluate the polynomial at that virtual distance (`rv = 0`); estimate TOF: `t ~= vDist / (speed * cos(angle))`.
+2. Evaluate the polynomial at that virtual distance (`rv = 0`); read TOF straight off the fitted TOF surface.
 3. Shift: `vdx = dist - v_r * t`, `vdz = -v_t * t`.
 4. Repeat up to 5 iterations; converges in <= 3 once `|delta_t| < 2 ms`.
 5. **Virtual distance** `= sqrt(vdx^2 + vdz^2)`: final polynomial query.
@@ -95,7 +103,8 @@ private record PolyModel(
         double dMean,   double dStd,
         double vMean,   double vStd,
         double[] speedCoeffs,
-        double[] angleCoeffs) {}
+        double[] angleCoeffs,
+        double[] tofCoeffs) {}
 
 private static final PolyModel HUB_MODEL =
         new PolyModel(
@@ -105,8 +114,11 @@ private static final PolyModel HUB_MODEL =
                 4.7946224256, 1.9514199579,  // dMean, dStd
                 -0.0434782609, 1.9813242725, // vMean, vStd
                 new double[] { /* 10 speed coefficients */ },
-                new double[] { /* 10 angle coefficients */ });
+                new double[] { /* 10 angle coefficients */ },
+                new double[] { /* 10 TOF coefficients (s) */ });
 ```
+
+`tofCoeffs` is omitted from both the record and the constant when the table carries no TOF data (an import from an older run).
 
 The feed table generates an equivalent `FEED_MODEL` constant. Both models share the same `PolyModel` record; declare it once and keep both constants.
 
@@ -120,8 +132,8 @@ The feed table generates an equivalent `FEED_MODEL` constant. Both models share 
 |---|---|
 | **Shot Table** | Generate the full (distance x rv) sweep and polynomial fit. Charts: Speed Map, Angle Map, Tolerance, Poly Curves (rv slices), Coefficients. Export/import JSON; generate Java. |
 | **Shot Simulation** | Single-distance analysis: trajectory view and valid-region view with tolerance crosshairs and shoot-on-move correction. |
-| **Shot Lookup** | Query the fitted polynomial at any (distance, rv, lateral velocity). Returns exit speed, launch angle, RPM estimate, yaw offset. |
-| **Poly Surface** | Full-screen 3D surface (Plotly). Toggle between Exit Speed and Launch Angle; overlay raw data points. |
+| **Shot Lookup** | Query the fitted polynomial at any (distance, rv, lateral velocity). Returns exit speed, launch angle, RPM estimate, flight time, yaw offset. |
+| **Poly Surface** | Full-screen 3D surface (Plotly). Toggle between Exit Speed, Launch Angle, and Flight Time; overlay raw data points. |
 
 ### Feed Shot mode
 
@@ -169,8 +181,11 @@ docs/
   physics.js      # Ball flight simulation (drag + Magnus + spin decay + wall/ceiling/floor)
   shot_table.js   # 2D polynomial solver (least-squares Gauss-Jordan + ShotPolynomialSolver)
   worker.js       # Off-thread table generator (hub and feed)
+  check.html      # Self-check for the TOF surface and virtual-target solve
   style.css       # Dark blue/purple theme (CSS custom properties)
 ```
+
+Open `check.html` on the same static server to run the self-check; it prints one line per assertion.
 
 ---
 

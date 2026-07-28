@@ -737,6 +737,7 @@ function runTableInline(cfg, onProgress, onDone, onError) {
               distance: dist, radialVelocity: rv,
               exitSpeed:   optimal.speed * cfg.mpsFactor,
               launchAngle: optimal.angle + cfg.hoodAngleOffset,
+              timeOfFlight: optimal.tof,
               toleranceSpeed: PHYSICS.std(speeds),
               toleranceAngle: PHYSICS.std(angles),
               validCount: valid.length,
@@ -744,7 +745,7 @@ function runTableInline(cfg, onProgress, onDone, onError) {
           } else {
             entry = {
               distance: dist, radialVelocity: rv,
-              exitSpeed: 0, launchAngle: 0,
+              exitSpeed: 0, launchAngle: 0, timeOfFlight: 0,
               toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
             };
           }
@@ -911,15 +912,22 @@ function renderPolyCoeffs() {
     return;
   }
 
+  display.innerHTML = coeffTableHtml(c);
+}
+
+/** Coefficient table markup shared by the hub and feed coefficient panes. */
+function coeffTableHtml(c) {
+  const cell = v => `<td class="poly-expr">${v >= 0 ? '+' : ''}${v.toExponential(5)}</td>`;
   const rows = c.terms.map(([a, b], i) => `
     <tr>
       <td class="poly-term">${termLabel(a, b)}</td>
       <td>[${a},${b}]</td>
-      <td class="poly-expr">${c.speedCoeffs[i] >= 0 ? '+' : ''}${c.speedCoeffs[i].toExponential(5)}</td>
-      <td class="poly-expr">${c.angleCoeffs[i] >= 0 ? '+' : ''}${c.angleCoeffs[i].toExponential(5)}</td>
+      ${cell(c.speedCoeffs[i])}
+      ${cell(c.angleCoeffs[i])}
+      ${c.tofCoeffs?.length ? cell(c.tofCoeffs[i]) : ''}
     </tr>`).join('');
 
-  display.innerHTML = `
+  return `
     <div class="coeffs-toolbar">
       <span style="font-size:11px;color:var(--text-muted)">
         Single degree-${c.degree} surface · d = distance (m) · v = radial velocity (m/s)
@@ -934,6 +942,7 @@ function renderPolyCoeffs() {
             <th>[a, b]</th>
             <th>Speed coeff (m/s)</th>
             <th>Angle coeff (°)</th>
+            ${c.tofCoeffs?.length ? '<th>TOF coeff (s)</th>' : ''}
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -1030,6 +1039,9 @@ window.doLookup = function () {
   }
 
   const rpm = solver.speedToRpm(result.exitSpeed, 1);
+  const tofHtml = result.timeOfFlight != null
+    ? `<span class="lbl">Time of Flight:</span>   <span class="val">${result.timeOfFlight.toFixed(3)} s</span><br/>`
+    : '';
 
   box.innerHTML = `
     <span class="lbl">Distance:</span>        <span class="val">${dist.toFixed(2)} m</span><br/>
@@ -1040,21 +1052,16 @@ window.doLookup = function () {
     <span class="lbl">Exit Speed:</span>       <span class="val">${result.exitSpeed.toFixed(3)} m/s</span><br/>
     <span class="lbl">Launch Angle:</span>     <span class="val">${result.launchAngle.toFixed(2)}°</span><br/>
     <span class="lbl">Flywheel RPM:</span>     <span class="val">${Math.round(rpm)} RPM</span><br/>
+    ${tofHtml}
     <br/>
     <span class="lbl">── Active Tuning ──────────────</span><br/>
     <span class="lbl">Spin rate:</span>        <span class="val">${val('tbl-spin').toFixed(0)} rps</span>
   `;
 
-  // Virtual-target correction (1690-style) — shown whenever robot is moving
+  // Virtual-target correction (1690-style) — shown whenever robot is moving.
+  // Solved from the fitted surfaces alone, exactly as the robot code does it.
   if (rv !== 0 || lateralVel !== 0) {
-    const spinRps      = val('tbl-spin');
-    const drag         = $('tbl-drag').checked;
-    const magnus       = $('tbl-magnus').checked;
-    const ceilingHeight = $('tbl-ceiling-on').checked ? val('tbl-ceiling') : null;
-    const vt = PHYSICS.computeVirtualTarget({
-      distance: dist, radialVel: rv, lateralVel,
-      spinRps, drag, magnus, ceilingHeight,
-    });
+    const vt = solver.solveVirtualTarget(dist, rv, lateralVel);
     const yawDir = vt.yawOffsetDeg < -0.05 ? ' (aim right)' :
                    vt.yawOffsetDeg >  0.05 ? ' (aim left)'  : '';
     // Re-query table at virtual distance for the corrected shot command
@@ -1066,6 +1073,7 @@ window.doLookup = function () {
       <br/>
       <span class="lbl" style="color:#7b8cde">── Shoot-on-Move (1690) ───────</span><br/>
       <span class="lbl">Virtual dist:</span>     <span class="val">${vt.virtualDist.toFixed(2)} m</span><br/>
+      <span class="lbl">Flight time:</span>      <span class="val">${vt.tof.toFixed(3)} s</span><br/>
       <span class="lbl">Yaw offset:</span>       <span class="val">${vt.yawOffsetDeg >= 0 ? '+' : ''}${vt.yawOffsetDeg.toFixed(1)}°${yawDir}</span><br/>
       ${vtHtml}
     `;
@@ -1124,13 +1132,17 @@ function _drawPlotlySurface(divId, emptyId, mode, showPts) {
     distMin + i * (distMax - distMin) / (NX - 1));
   const yArr = Array.from({ length: NY }, (_, i) =>
     rvMin   + i * (rvMax   - rvMin)   / (NY - 1));
-  const zSurf = yArr.map(rv =>
-    xArr.map(d => {
-      const r = solver.predict(d, rv);
-      return mode === 'speed' ? r.exitSpeed : r.launchAngle;
-    }));
+  const MODES = {
+    speed: { field: 'exitSpeed',    zLabel: 'Exit Speed (m/s)',   unit: 'm/s', fmt: '%{z:.3f} m/s',
+             title: 'Exit Speed — f(distance, radial_vel) [m/s]' },
+    angle: { field: 'launchAngle',  zLabel: 'Launch Angle (°)',   unit: '°',   fmt: '%{z:.2f}°',
+             title: 'Launch Angle — f(distance, radial_vel) [°]' },
+    tof:   { field: 'timeOfFlight', zLabel: 'Time of Flight (s)', unit: 's',   fmt: '%{z:.3f} s',
+             title: 'Time of Flight — f(distance, radial_vel) [s]' },
+  };
+  const M = MODES[mode] ?? MODES.speed;
 
-  const zLabel = mode === 'speed' ? 'Exit Speed (m/s)' : 'Launch Angle (°)';
+  const zSurf = yArr.map(rv => xArr.map(d => solver.predict(d, rv)[M.field]));
 
   const traces = [
     {
@@ -1140,16 +1152,14 @@ function _drawPlotlySurface(divId, emptyId, mode, showPts) {
       opacity: 0.94,
       showscale: true,
       colorbar: {
-        title: { text: mode === 'speed' ? 'm/s' : '°', font: { color: '#c7c9c7', size: 11 } },
+        title: { text: M.unit, font: { color: '#c7c9c7', size: 11 } },
         tickfont: { color: '#c7c9c7', size: 10 },
         bgcolor: 'rgba(0,0,0,0)',
         bordercolor: 'rgba(60,0,100,0.6)',
         thickness: 14, len: 0.72,
       },
       hovertemplate:
-        'dist: %{x:.2f} m<br>rv: %{y:.2f} m/s<br>' +
-        (mode === 'speed' ? 'speed: %{z:.3f} m/s' : 'angle: %{z:.2f}°') +
-        '<extra></extra>',
+        `dist: %{x:.2f} m<br>rv: %{y:.2f} m/s<br>${mode}: ${M.fmt}<extra></extra>`,
     },
   ];
 
@@ -1158,15 +1168,13 @@ function _drawPlotlySurface(divId, emptyId, mode, showPts) {
       type: 'scatter3d',
       x: valid.map(e => e.distance),
       y: valid.map(e => e.radialVelocity),
-      z: valid.map(e => mode === 'speed' ? e.exitSpeed : e.launchAngle),
+      z: valid.map(e => e[M.field]),
       mode: 'markers',
       marker: { size: 4, color: '#ffffff', opacity: 0.85,
                 line: { color: '#101820', width: 1 } },
       name: 'Table data',
       hovertemplate:
-        'dist: %{x:.2f} m<br>rv: %{y:.2f} m/s<br>' +
-        (mode === 'speed' ? 'speed: %{z:.3f} m/s' : 'angle: %{z:.2f}°') +
-        '<extra>table point</extra>',
+        `dist: %{x:.2f} m<br>rv: %{y:.2f} m/s<br>${mode}: ${M.fmt}<extra>table point</extra>`,
     });
   }
 
@@ -1186,9 +1194,7 @@ function _drawPlotlySurface(divId, emptyId, mode, showPts) {
     paper_bgcolor: '#101820',
     font: { color: '#f6f2f4', family: 'Segoe UI, system-ui, sans-serif', size: 11 },
     title: {
-      text: mode === 'speed'
-        ? 'Exit Speed — f(distance, radial_vel) [m/s]'
-        : 'Launch Angle — f(distance, radial_vel) [°]',
+      text: M.title,
       font: { size: 13, color: '#c5b4e3' },
       pad: { t: 6 }, x: 0.5,
     },
@@ -1196,7 +1202,7 @@ function _drawPlotlySurface(divId, emptyId, mode, showPts) {
       bgcolor: '#101820',
       xaxis: { ...axBase, title: 'Distance (m)' },
       yaxis: { ...axBase, title: 'Radial Velocity (m/s)' },
-      zaxis: { ...axBase, title: zLabel },
+      zaxis: { ...axBase, title: M.zLabel },
       camera: { eye: { x: 1.65, y: -1.75, z: 0.90 }, up: { x: 0, y: 0, z: 1 } },
       aspectratio: { x: 1.5, y: 1.0, z: 0.75 },
     },
@@ -1272,6 +1278,8 @@ window.generateFromOverview = function () {
 function buildPolyModelSnippet({ c, distMin, distMax, rvMin, rvMax, constName, modelName, modelComment }) {
   const maxLabelLen = Math.max(...c.terms.map(([a, b]) => termLabel(a, b).length));
   const basisList   = c.terms.map(([a, b]) => termLabel(a, b)).join(', ');
+  // Tables imported from before TOF generation carry no tof surface.
+  const hasTof      = !!c.tofCoeffs?.length;
 
   const fmtCoeffBlock = (coeffArr) =>
     c.terms.map(([a, b], i) => {
@@ -1297,7 +1305,9 @@ function buildPolyModelSnippet({ c, distMin, distMax, rvMin, rvMax, constName, m
      * @param vMean       radial-velocity normalisation mean
      * @param vStd        radial-velocity normalisation standard deviation
      * @param speedCoeffs exit-speed coefficients in the monomial basis ${basisList}
-     * @param angleCoeffs launch-angle coefficients in the same basis
+     * @param angleCoeffs launch-angle coefficients in the same basis${hasTof ? `
+     * @param tofCoeffs   time-of-flight coefficients (seconds) in the same basis; read this instead
+     *                    of simulating or estimating flight time when solving the virtual target` : ''}
      */
     private record PolyModel(
             String name,
@@ -1310,7 +1320,8 @@ function buildPolyModelSnippet({ c, distMin, distMax, rvMin, rvMax, constName, m
             double vMean,
             double vStd,
             double[] speedCoeffs,
-            double[] angleCoeffs) {}
+            double[] angleCoeffs${hasTof ? `,
+            double[] tofCoeffs` : ''}) {}
 
     /** ${modelComment} */
     private static final PolyModel ${constName} =
@@ -1329,7 +1340,10 @@ ${fmtCoeffBlock(c.speedCoeffs)}
                     },
                     new double[] {
 ${fmtCoeffBlock(c.angleCoeffs)}
-                    });`;
+                    }${hasTof ? `,
+                    new double[] {
+${fmtCoeffBlock(c.tofCoeffs)}
+                    }` : ''});`;
 }
 
 window.generateJava = function () {
@@ -1426,6 +1440,7 @@ function runFeedTableInline(cfg, onProgress, onDone, onError) {
               distance: dist, radialVelocity: rv,
               exitSpeed:      optimal.speed,
               launchAngle:    optimal.angle,
+              timeOfFlight:   optimal.tof,
               toleranceSpeed: PHYSICS.std(valid.map(s => s.speed)),
               toleranceAngle: PHYSICS.std(valid.map(s => s.angle)),
               validCount:     valid.length,
@@ -1433,7 +1448,7 @@ function runFeedTableInline(cfg, onProgress, onDone, onError) {
           } else {
             entry = {
               distance: dist, radialVelocity: rv,
-              exitSpeed: 0, launchAngle: 0,
+              exitSpeed: 0, launchAngle: 0, timeOfFlight: 0,
               toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
             };
           }
@@ -1600,33 +1615,7 @@ function renderFeedPolyCoeffs() {
     return;
   }
 
-  const rows = c.terms.map(([a, b], i) => `
-    <tr>
-      <td class="poly-term">${termLabel(a, b)}</td>
-      <td>[${a},${b}]</td>
-      <td class="poly-expr">${c.speedCoeffs[i] >= 0 ? '+' : ''}${c.speedCoeffs[i].toExponential(5)}</td>
-      <td class="poly-expr">${c.angleCoeffs[i] >= 0 ? '+' : ''}${c.angleCoeffs[i].toExponential(5)}</td>
-    </tr>`).join('');
-
-  display.innerHTML = `
-    <div class="coeffs-toolbar">
-      <span style="font-size:11px;color:var(--text-muted)">
-        Single degree-${c.degree} surface · d = distance (m) · v = radial velocity (m/s)
-        · f(d,v) = Σ coeff·dᵃ·vᵇ
-      </span>
-    </div>
-    <div style="overflow-x:auto">
-      <table class="poly-coeff-table">
-        <thead>
-          <tr>
-            <th>Term</th><th>[a, b]</th>
-            <th>Speed coeff (m/s)</th><th>Angle coeff (°)</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  `;
+  display.innerHTML = coeffTableHtml(c);
 }
 
 window.exportFeedTable = function () {
@@ -1793,6 +1782,9 @@ window.doFeedLookup = function () {
   }
 
   const rpm = feedSolver.speedToRpm(result.exitSpeed, 1);
+  const tofHtml = result.timeOfFlight != null
+    ? `<br/><span class="lbl">Time of Flight:</span>   <span class="val">${result.timeOfFlight.toFixed(3)} s</span>`
+    : '';
 
   box.innerHTML = `
     <span class="lbl">Distance:</span>        <span class="val">${dist.toFixed(2)} m</span><br/>
@@ -1802,26 +1794,12 @@ window.doFeedLookup = function () {
     <span class="lbl">── Shot Command ───────────────</span><br/>
     <span class="lbl">Exit Speed:</span>       <span class="val">${result.exitSpeed.toFixed(3)} m/s</span><br/>
     <span class="lbl">Launch Angle:</span>     <span class="val">${result.launchAngle.toFixed(2)}°</span><br/>
-    <span class="lbl">Flywheel RPM:</span>     <span class="val">${Math.round(rpm)} RPM</span>
+    <span class="lbl">Flywheel RPM:</span>     <span class="val">${Math.round(rpm)} RPM</span>${tofHtml}
   `;
 
   // Polynomial-based virtual target — mirrors FeedCalculator.java getShotParams exactly
   if (rv !== 0 || lateralVel !== 0) {
-    let vdx = dist, vdz = 0, tof = 0;
-    for (let iter = 0; iter < 5; iter++) {
-      const vDist = Math.sqrt(vdx * vdx + vdz * vdz);
-      if (vDist < 0.1) break;
-      const res = feedSolver.predict(vDist, 0);
-      if (!res) break;
-      const cosA   = Math.cos(res.launchAngle * Math.PI / 180);
-      const prevTof = tof;
-      tof = vDist / Math.max(res.exitSpeed * cosA, 0.5);
-      vdx = dist - rv * tof;
-      vdz = -lateralVel * tof;
-      if (iter > 0 && Math.abs(tof - prevTof) < 0.002) break;
-    }
-    const virtualDist  = Math.sqrt(vdx * vdx + vdz * vdz);
-    const yawOffsetDeg = Math.atan2(-lateralVel * tof, dist - rv * tof) * 180 / Math.PI;
+    const { virtualDist, yawOffsetDeg, tof } = feedSolver.solveVirtualTarget(dist, rv, lateralVel);
     const vtResult = feedSolver.predict(virtualDist, 0);
     const yawDir = yawOffsetDeg < -0.05 ? ' (aim right)' :
                    yawOffsetDeg >  0.05 ? ' (aim left)'  : '';
@@ -1833,6 +1811,7 @@ window.doFeedLookup = function () {
       <br/>
       <span class="lbl" style="color:#7b8cde">── Shoot-on-Move (1690) ───────</span><br/>
       <span class="lbl">Virtual dist:</span>     <span class="val">${virtualDist.toFixed(2)} m</span><br/>
+      <span class="lbl">Flight time:</span>      <span class="val">${tof.toFixed(3)} s</span><br/>
       <span class="lbl">Yaw offset:</span>       <span class="val">${yawOffsetDeg >= 0 ? '+' : ''}${yawOffsetDeg.toFixed(1)}°${yawDir}</span><br/>
       ${vtHtml}
     `;

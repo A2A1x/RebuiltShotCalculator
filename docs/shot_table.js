@@ -1,7 +1,7 @@
 // Shot table — 2D polynomial surface fit.
 //
 // Fits a single degree-3 polynomial in two variables:
-//   (exit_speed, launch_angle) = f(distance, radial_velocity)
+//   (exit_speed, launch_angle, time_of_flight) = f(distance, radial_velocity)
 //
 // Basis monomials: all d^a · v^b with a+b ≤ degree
 //   degree 3 → 10 terms: 1, d, v, d², d·v, v², d³, d²·v, d·v², v³
@@ -150,6 +150,7 @@ const SHOT_TABLE = (() => {
       this.degree = degree;
       this._speedPoly = null;   // { coeffs: Float64Array, terms: [a,b][] }
       this._anglePoly = null;
+      this._tofPoly   = null;   // null when the table predates TOF generation
       this._distMin = 0;
       this._distMax = 10;
       this._rvMin   = -3;
@@ -158,7 +159,9 @@ const SHOT_TABLE = (() => {
 
     /**
      * Fit 2D polynomials to all table entries simultaneously.
-     * Entry format: { distance, radialVelocity, exitSpeed, launchAngle, validCount }
+     * Entry format: { distance, radialVelocity, exitSpeed, launchAngle, timeOfFlight, validCount }
+     * `timeOfFlight` is optional — tables generated before it existed still fit
+     * speed and angle, and predict() then returns a null timeOfFlight.
      */
     fit(tableEntries) {
       const entries = tableEntries.filter(e => e.validCount > 0);
@@ -169,6 +172,7 @@ const SHOT_TABLE = (() => {
       const vs     = entries.map(e => e.radialVelocity);
       const speeds = entries.map(e => e.exitSpeed);
       const angles = entries.map(e => e.launchAngle);
+      const tofs   = entries.map(e => e.timeOfFlight);
 
       this._distMin = Math.min(...ds);
       this._distMax = Math.max(...ds);
@@ -177,19 +181,50 @@ const SHOT_TABLE = (() => {
 
       this._speedPoly = polyfit2D(ds, vs, speeds, this.degree);
       this._anglePoly = polyfit2D(ds, vs, angles, this.degree);
+      this._tofPoly   = tofs.every(t => Number.isFinite(t) && t > 0)
+        ? polyfit2D(ds, vs, tofs, this.degree)
+        : null;
     }
 
     /**
-     * Evaluate (exitSpeed, launchAngle) for any (distance, radialVel).
-     * Inputs are clamped to the fitted data range.
+     * Evaluate (exitSpeed, launchAngle, timeOfFlight) for any (distance, radialVel).
+     * Inputs are clamped to the fitted data range. timeOfFlight is null for
+     * tables generated without it.
      */
     predict(distance, radialVel = 0) {
       if (!this._speedPoly) return null;
       const d = Math.max(this._distMin, Math.min(this._distMax, distance));
       const v = Math.max(this._rvMin,   Math.min(this._rvMax,   radialVel));
       return {
-        exitSpeed:   polyval2D(this._speedPoly, d, v),
-        launchAngle: polyval2D(this._anglePoly, d, v),
+        exitSpeed:    polyval2D(this._speedPoly, d, v),
+        launchAngle:  polyval2D(this._anglePoly, d, v),
+        timeOfFlight: this._tofPoly ? polyval2D(this._tofPoly, d, v) : null,
+      };
+    }
+
+    /**
+     * Iterative virtual-target solve (1690 Orbit) driven entirely by the fitted
+     * surfaces — no flight simulation at runtime. TOF comes from the fitted map;
+     * without one it falls back to the ballistic estimate vDist / (speed·cosθ).
+     */
+    solveVirtualTarget(distance, radialVel = 0, lateralVel = 0, maxIter = 5) {
+      let vdx = distance, vdz = 0, tof = 0;
+      for (let i = 0; i < maxIter; i++) {
+        const vDist = Math.hypot(vdx, vdz);
+        if (vDist < 0.1) break;
+        const r = this.predict(vDist, 0);
+        if (!r) break;
+        const prevTof = tof;
+        tof = r.timeOfFlight ??
+              vDist / Math.max(r.exitSpeed * Math.cos(r.launchAngle * Math.PI / 180), 0.5);
+        vdx = distance - radialVel * tof;
+        vdz = -lateralVel * tof;
+        if (i > 0 && Math.abs(tof - prevTof) < 0.002) break;
+      }
+      return {
+        virtualDist:  Math.hypot(vdx, vdz),
+        yawOffsetDeg: Math.atan2(-lateralVel * tof, distance - radialVel * tof) * 180 / Math.PI,
+        tof,
       };
     }
 
@@ -202,10 +237,11 @@ const SHOT_TABLE = (() => {
      *
      * `terms[i]` = [d_exponent, v_exponent]
      * Polynomial: Σ speedCoeffs[i] · d^terms[i][0] · v^terms[i][1]
+     * `tofCoeffs` is empty when the table carries no time-of-flight data.
      */
     getCoefficients() {
       if (!this._speedPoly) {
-        return { degree: this.degree, terms: [], speedCoeffs: [], angleCoeffs: [],
+        return { degree: this.degree, terms: [], speedCoeffs: [], angleCoeffs: [], tofCoeffs: [],
                  dMean: 0, dStd: 1, vMean: 0, vStd: 1 };
       }
       return {
@@ -213,6 +249,7 @@ const SHOT_TABLE = (() => {
         terms:       this._speedPoly.terms,
         speedCoeffs: Array.from(this._speedPoly.coeffs),
         angleCoeffs: Array.from(this._anglePoly.coeffs),
+        tofCoeffs:   this._tofPoly ? Array.from(this._tofPoly.coeffs) : [],
         dMean:       this._speedPoly.dMean,
         dStd:        this._speedPoly.dStd,
         vMean:       this._speedPoly.vMean,

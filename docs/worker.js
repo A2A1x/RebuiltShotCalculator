@@ -50,6 +50,7 @@ self.onmessage = function (e) {
             radialVelocity: rv,
             exitSpeed:      optimal.speed * mpsFactor,
             launchAngle:    optimal.angle + hoodAngleOffset,
+            timeOfFlight:   optimal.tof,
             toleranceSpeed: PHYSICS.std(speeds),
             toleranceAngle: PHYSICS.std(angles),
             validCount:     valid.length,
@@ -57,7 +58,7 @@ self.onmessage = function (e) {
         } else {
           entry = {
             distance: dist, radialVelocity: rv,
-            exitSpeed: 0, launchAngle: 0,
+            exitSpeed: 0, launchAngle: 0, timeOfFlight: 0,
             toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
           };
         }
@@ -116,6 +117,7 @@ function generateFeedTable(cfg) {
             distance: dist, radialVelocity: rv,
             exitSpeed:      optimal.speed,
             launchAngle:    optimal.angle,
+            timeOfFlight:   optimal.tof,
             toleranceSpeed: PHYSICS.std(valid.map(s => s.speed)),
             toleranceAngle: PHYSICS.std(valid.map(s => s.angle)),
             validCount:     valid.length,
@@ -123,7 +125,7 @@ function generateFeedTable(cfg) {
         } else {
           entry = {
             distance: dist, radialVelocity: rv,
-            exitSpeed: 0, launchAngle: 0,
+            exitSpeed: 0, launchAngle: 0, timeOfFlight: 0,
             toleranceSpeed: 0, toleranceAngle: 0, validCount: 0,
           };
         }
