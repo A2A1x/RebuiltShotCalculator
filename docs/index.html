@@ -69,6 +69,14 @@
             <label>Radial Vel Steps</label>
             <input type="number" id="ov-rvsteps" value="7" min="3" max="15" />
           </div>
+          <div class="form-group">
+            <label>Launch Angle Range (°)</label>
+            <div class="input-row">
+              <input type="number" id="ov-amin" value="40.68" step="0.1" min="1" max="89" style="width:68px" />
+              <span style="color:#666">–</span>
+              <input type="number" id="ov-amax" value="81.0"  step="0.1" min="1" max="89" style="width:68px" />
+            </div>
+          </div>
 
           <div class="form-group" style="margin-top:4px">
             <label>Spin (rps)</label>
@@ -182,6 +190,14 @@
             <input type="range"  id="sim-spin-sl" value="10" min="0" max="25" step="1" />
           </div>
         </div>
+        <div class="form-group">
+          <label>Launch Angle Range (°)</label>
+          <div class="input-row">
+            <input type="number" id="sim-amin" value="40.68" step="0.1" min="1" max="89" style="width:78px" />
+            <span style="color:#666">–</span>
+            <input type="number" id="sim-amax" value="81.0"  step="0.1" min="1" max="89" style="width:78px" />
+          </div>
+        </div>
 
         <h3 style="margin-top:16px">Physics</h3>
         <label class="checkbox-row"><input type="checkbox" id="sim-drag"   checked /> Aerodynamic Drag</label>
@@ -243,6 +259,14 @@
         <div class="form-group">
           <label>Radial Vel Steps</label>
           <input type="number" id="tbl-rvsteps" value="7" min="3" max="15" />
+        </div>
+        <div class="form-group">
+          <label>Launch Angle Range (°)</label>
+          <div class="input-row">
+            <input type="number" id="tbl-amin" value="40.68" step="0.1" min="1" max="89" style="width:78px" />
+            <span style="color:#666">–</span>
+            <input type="number" id="tbl-amax" value="81.0"  step="0.1" min="1" max="89" style="width:78px" />
+          </div>
         </div>
 
         <h3 style="margin-top:16px">Tuning</h3>
@@ -437,6 +461,14 @@
             <input type="range"  id="fsim-spin-sl" value="10" min="0" max="25" step="1" />
           </div>
         </div>
+        <div class="form-group">
+          <label>Launch Angle Range (°)</label>
+          <div class="input-row">
+            <input type="number" id="fsim-amin" value="40.68" step="0.1" min="1" max="89" style="width:78px" />
+            <span style="color:#666">–</span>
+            <input type="number" id="fsim-amax" value="81.0"  step="0.1" min="1" max="89" style="width:78px" />
+          </div>
+        </div>
 
         <h3 style="margin-top:16px">Physics</h3>
         <label class="checkbox-row"><input type="checkbox" id="fsim-drag"   checked /> Aerodynamic Drag</label>
@@ -483,6 +515,14 @@
         <div class="form-group">
           <label>Radial Vel Steps</label>
           <input type="number" id="feed-rvsteps" value="7" min="3" max="15" />
+        </div>
+        <div class="form-group">
+          <label>Launch Angle Range (°)</label>
+          <div class="input-row">
+            <input type="number" id="feed-amin" value="40.68" step="0.1" min="1" max="89" style="width:78px" />
+            <span style="color:#666">–</span>
+            <input type="number" id="feed-amax" value="81.0"  step="0.1" min="1" max="89" style="width:78px" />
+          </div>
         </div>
         <h3 style="margin-top:16px">Tuning</h3>
         <div class="form-group">

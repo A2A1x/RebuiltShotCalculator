@@ -48,7 +48,7 @@ Picks the shot that maximizes the std-normalised margin from the valid-region bo
 - **Hub geometry**: front lip at 1.83 m, opening radius 0.530 m. Front and back walls each 8 in tall; crossing either is a miss.
 - **Feed geometry**: ball lands when `y <= 0`; landing x is interpolated linearly between the last two physics steps for precision.
 - **Ceiling limit** (hub only): arcs crossing the configured height are rejected.
-- **Launch angle sweep**: both modes use 40.68 deg – 81.0 deg.
+- **Launch angle sweep**: set per panel in the UI (**Launch Angle Range**), defaulting to 40.68 deg – 81.0 deg in both modes. Narrow it to the hood travel the shooter can actually reach and the optimizer only picks shots that are physically commandable.
 
 ---
 
@@ -143,6 +143,8 @@ The feed table generates an equivalent `FEED_MODEL` constant. Both models share 
 | **Shot Simulation** | Simulate a feed shot at a chosen distance: trajectory with target marker and landing point. |
 | **Shot Lookup** | Query the feed polynomial at any (distance, rv, lateral velocity). Same virtual-target iteration as hub. |
 | **Poly Surface** | Polynomial curves for the feed model. |
+
+**Launch Angle Range**: every generation and simulation panel has its own min/max launch angle (deg) bounding its speed x angle sweep. Values are clamped to 1–89 deg, swapped if entered inverted, and blanks fall back to 40.68–81.0 deg; the inputs are rewritten with whatever range was actually swept. The Shot Table and Shot Lookup tabs report the active range alongside the fit.
 
 **All Chart.js charts**: scroll to zoom, drag to pan, double-click to reset.
 **3D surface**: drag to orbit, scroll to zoom, double-click to reset.

@@ -263,6 +263,7 @@ const PHYSICS = (() => {
     distance, radialVel = 0, lateralVel = 0,
     spinRps = 50, drag = true, magnus = true,
     ceilingHeight = null, maxIter = 5,
+    angleRange = [40.68, 81.0],
   }) {
     let tof = 0;
     let vdx = distance;   // virtual target radial component
@@ -276,7 +277,7 @@ const PHYSICS = (() => {
       const valid = findValidShots({
         distance: vDist, robotRadialVel: 0,
         spinRps, drag, magnus, ceilingHeight,
-        speedRange: [5.0, 20.0], angleRange: [40.68, 81.0],
+        speedRange: [5.0, 20.0], angleRange,
         speedSteps: 40, angleSteps: 40,
       });
       const opt = selectOptimalShot(valid);
