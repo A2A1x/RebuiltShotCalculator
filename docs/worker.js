@@ -17,6 +17,7 @@ self.onmessage = function (e) {
     hoodAngleOffset = 0, mpsFactor = 1.0, spinRps = 50,
     drag = true, magnus = true,
     ceilingHeight = null,
+    angleRange = [40.68, 81.0],
   } = cfg;
 
   const distances   = linspace(distMin, distMax, distSteps);
@@ -36,7 +37,7 @@ self.onmessage = function (e) {
           distance: dist, robotRadialVel: rv, spinRps,
           drag, magnus,
           ceilingHeight,
-          speedRange: [5.0, 20.0], angleRange: [40.68, 81.0],
+          speedRange: [5.0, 20.0], angleRange,
           speedSteps: 45, angleSteps: 45,
         });
         const optimal = PHYSICS.selectOptimalShot(valid);
@@ -90,6 +91,7 @@ function generateFeedTable(cfg) {
     rvSteps = 7,
     spinRps = 10,
     drag = true, magnus = true,
+    angleRange = [40.68, 81.0],
   } = cfg;
 
   const distances  = linspace(distMin, distMax, distSteps);
@@ -106,7 +108,7 @@ function generateFeedTable(cfg) {
         const valid = PHYSICS.findValidFeedShots({
           distance: dist, robotRadialVel: rv, spinRps,
           drag, magnus,
-          speedRange: [3.0, 18.0], angleRange: [40.68, 81.0],
+          speedRange: [3.0, 18.0], angleRange,
           speedSteps: 40, angleSteps: 40,
         });
         const optimal = PHYSICS.selectOptimalFeedShot(valid, dist);

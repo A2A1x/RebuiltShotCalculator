@@ -135,15 +135,41 @@ function switchFeedTab(name) {
     c.classList.toggle('active', c.id === 'ftab-' + name));
 }
 
-// Sweep range used by the Simulate tab — full physics envelope so every
-// shot that scores is reported. (Shot Table generation passes its own
-// settings and is unaffected.)
-const SIM_SWEEP = {
-  speedRange: [5.0, 20.0],
-  angleRange: [40.68, 81.0],
-  speedSteps: 150,
-  angleSteps: 150,
-};
+// ── Launch angle range ─────────────────────────────────────────────────────────
+// Every sweep is bounded by a user-settable launch angle range: the hood travel
+// the shooter can actually reach. Defaults span the full physics envelope.
+const DEFAULT_ANGLE_RANGE = [40.68, 81.0];
+const ANGLE_LIMITS = [1, 89];
+
+/**
+ * Read a launch angle range from a min/max input pair.
+ * Blanks fall back to the default, values are clamped to ANGLE_LIMITS and
+ * swapped if inverted. The normalised values are written back so the inputs
+ * always show the range that was actually swept.
+ */
+function readAngleRange(minId, maxId) {
+  const clamp = (v, dflt) => Number.isFinite(v)
+    ? Math.min(Math.max(v, ANGLE_LIMITS[0]), ANGLE_LIMITS[1]) : dflt;
+
+  let lo = clamp(val(minId), DEFAULT_ANGLE_RANGE[0]);
+  let hi = clamp(val(maxId), DEFAULT_ANGLE_RANGE[1]);
+  if (lo > hi) [lo, hi] = [hi, lo];
+
+  $(minId).value = +lo.toFixed(2);
+  $(maxId).value = +hi.toFixed(2);
+  return [lo, hi];
+}
+
+/** Sweep steps for the Simulate tab — a dense envelope so every scoring shot
+ *  is reported. Angle bounds come from the tab's own inputs. */
+function simSweep() {
+  return {
+    speedRange: [5.0, 20.0],
+    angleRange: readAngleRange('sim-amin', 'sim-amax'),
+    speedSteps: 150,
+    angleSteps: 150,
+  };
+}
 
 // ── Simulate tab ───────────────────────────────────────────────────────────────
 // Sweeps the valid region for the given distance / radial velocity, picks the
@@ -161,7 +187,8 @@ window.runSimulate = function () {
   };
 
   const box = $('sim-result');
-  const valid   = PHYSICS.findValidShots({ ...params, ...SIM_SWEEP });
+  const sweep   = simSweep();
+  const valid   = PHYSICS.findValidShots({ ...params, ...sweep });
   const optimal = PHYSICS.selectOptimalShot(valid);
 
   if (!optimal) {
@@ -193,7 +220,7 @@ window.runSimulate = function () {
     const vt = PHYSICS.computeVirtualTarget({
       distance: dist, radialVel: params.robotRadialVel, lateralVel,
       spinRps: params.spinRps, drag: params.drag, magnus: params.magnus,
-      ceilingHeight: params.ceilingHeight,
+      ceilingHeight: params.ceilingHeight, angleRange: sweep.angleRange,
     });
     const yawDir = vt.yawOffsetDeg < -0.05 ? ' (aim right)' :
                    vt.yawOffsetDeg >  0.05 ? ' (aim left)'  : '';
@@ -264,7 +291,7 @@ window.runValidRegion = function () {
     ceilingHeight:  $('sim-ceiling-on').checked ? val('sim-ceiling') : null,
   };
 
-  const valid   = PHYSICS.findValidShots({ ...params, ...SIM_SWEEP });
+  const valid   = PHYSICS.findValidShots({ ...params, ...simSweep() });
   const optimal = PHYSICS.selectOptimalShot(valid);
 
   if (!valid.length) {
@@ -611,6 +638,7 @@ window.generateTable = function () {
     distSteps: intVal('tbl-dsteps'), rvSteps: intVal('tbl-rvsteps'),
     hoodAngleOffset: 0,
     mpsFactor: 1,
+    angleRange: readAngleRange('tbl-amin', 'tbl-amax'),
     spinRps: val('tbl-spin'),
     drag:   $('tbl-drag').checked,
     magnus: $('tbl-magnus').checked,
@@ -649,13 +677,14 @@ window.generateTable = function () {
     if ($('ov-progress-bar'))  $('ov-progress-bar').style.width = '100%';
     if ($('ov-progress-label')) $('ov-progress-label').textContent = '100% — Done';
     const validCount = tableEntries.filter(e => e.validCount > 0).length;
+    const angleNote = `angles ${cfg.angleRange[0].toFixed(2)}°–${cfg.angleRange[1].toFixed(2)}°`;
     if ($('ov-status')) {
       $('ov-status').className = 'result-box info';
-      $('ov-status').innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · degree 3`;
+      $('ov-status').innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · ${angleNote} · degree 3`;
       $('ov-status').classList.remove('hidden');
     }
     status.className = 'result-box info';
-    status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · 2D surface fitted (degree 3)`;
+    status.innerHTML = `${tableEntries.length} entries · ${validCount} with valid shots · ${angleNote} · 2D surface fitted (degree 3)`;
     status.classList.remove('hidden');
     drawTableCharts();
     drawPolyCurves('polyCurvesChart');
@@ -725,7 +754,7 @@ function runTableInline(cfg, onProgress, onDone, onError) {
             distance: dist, robotRadialVel: rv, spinRps: cfg.spinRps,
             drag: cfg.drag, magnus: cfg.magnus,
             ceilingHeight: cfg.ceilingHeight,
-            speedRange: [5.0, 20.0], angleRange: [40.68, 81.0],
+            speedRange: [5.0, 20.0], angleRange: cfg.angleRange,
             speedSteps: 45, angleSteps: 45,
           });
           const optimal = PHYSICS.selectOptimalShot(valid);
@@ -1055,7 +1084,8 @@ window.doLookup = function () {
     ${tofHtml}
     <br/>
     <span class="lbl">── Active Tuning ──────────────</span><br/>
-    <span class="lbl">Spin rate:</span>        <span class="val">${val('tbl-spin').toFixed(0)} rps</span>
+    <span class="lbl">Spin rate:</span>        <span class="val">${val('tbl-spin').toFixed(0)} rps</span><br/>
+    <span class="lbl">Angle range:</span>     <span class="val">${val('tbl-amin').toFixed(2)}° – ${val('tbl-amax').toFixed(2)}°</span>
   `;
 
   // Virtual-target correction (1690-style) — shown whenever robot is moving.
@@ -1251,6 +1281,7 @@ window.generateFromOverview = function () {
   const map = {
     'ov-dmin': 'tbl-dmin', 'ov-dmax': 'tbl-dmax',
     'ov-dsteps': 'tbl-dsteps', 'ov-rvsteps': 'tbl-rvsteps',
+    'ov-amin': 'tbl-amin', 'ov-amax': 'tbl-amax',
     'ov-spin': 'tbl-spin',
     'ov-ceiling': 'tbl-ceiling',
   };
@@ -1430,7 +1461,7 @@ function runFeedTableInline(cfg, onProgress, onDone, onError) {
           const valid = PHYSICS.findValidFeedShots({
             distance: dist, robotRadialVel: rv, spinRps: cfg.spinRps,
             drag: cfg.drag, magnus: cfg.magnus,
-            speedRange: [3.0, 18.0], angleRange: [40.68, 81.0],
+            speedRange: [3.0, 18.0], angleRange: cfg.angleRange,
             speedSteps: 40, angleSteps: 40,
           });
           const optimal = PHYSICS.selectOptimalFeedShot(valid, dist);
@@ -1488,7 +1519,8 @@ window.generateFeedTable = function () {
   const spinRps  = parseFloat($('feed-spin').value);
   const drag     = $('feed-drag').checked;
   const magnus   = $('feed-magnus').checked;
-  const cfg = { distMin, distMax, distSteps, rvSteps, spinRps, drag, magnus };
+  const angleRange = readAngleRange('feed-amin', 'feed-amax');
+  const cfg = { distMin, distMax, distSteps, rvSteps, spinRps, drag, magnus, angleRange };
 
   const status = $('feed-status');
   const bar    = $('feed-progress-bar');
@@ -1518,7 +1550,8 @@ window.generateFeedTable = function () {
 
     const validCount = feedTableEntries.filter(e => e.validCount > 0).length;
     status.className = 'result-box info';
-    status.innerHTML = `${feedTableEntries.length} entries · ${validCount} with valid shots · degree 3`;
+    status.innerHTML = `${feedTableEntries.length} entries · ${validCount} with valid shots · `
+      + `angles ${angleRange[0].toFixed(2)}°–${angleRange[1].toFixed(2)}° · degree 3`;
     status.classList.remove('hidden');
 
     drawFeedTableCharts();
@@ -1671,7 +1704,7 @@ window.runFeedSimulate = function () {
   const valid = PHYSICS.findValidFeedShots({
     distance: dist, robotRadialVel: rv, spinRps,
     drag, magnus,
-    speedRange: [3.0, 18.0], angleRange: [40.68, 81.0],
+    speedRange: [3.0, 18.0], angleRange: readAngleRange('fsim-amin', 'fsim-amax'),
     speedSteps: 80, angleSteps: 80,
   });
   const optimal = PHYSICS.selectOptimalFeedShot(valid, dist);
